@@ -19,10 +19,10 @@ from utils.evaluate import test
 from utils.helper import early_stopping
 import matplotlib.pyplot as plt
 import random as rd
-# import os
+import os
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 # os.environ['CUDA_VISIBLE_DEVICES']='3,5,6,7'
-# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 
 n_users = 0
 n_items = 0
@@ -77,7 +77,8 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
             now_adj.col+=n_users  #remap entities
         count=now_adj.data.size
         tot+=count
-
+        if(count==0):
+            continue
         # ''' show user entity information'''
         # print("latent relation : "+str(r_id)+" count: "+str(count))
         # values, counts = np.unique(now_adj.data, return_counts=True)
@@ -109,16 +110,17 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
     return return_adj_mat_list
 
 def build_prefer_graph(adj_mat_list):
-    prefer_graph = nx.MultiDiGraph()
+    prefer_graphs=[]
     exist_nodes=set()
     for r_id,adj in enumerate(adj_mat_list):
-        # print("prefer "+str(r_id)+" has enumerate..")
+        prefer_graph = nx.MultiDiGraph()
         for h_id, t_id, v in zip(adj.row, adj.col, adj.data):
             prefer_graph.add_edge(h_id, t_id, key=r_id)
             exist_nodes.add(h_id)
             exist_nodes.add(t_id)
+        prefer_graphs.append(prefer_graph)
 
-    return prefer_graph,list(exist_nodes)
+    return prefer_graphs,list(exist_nodes)
 
 
 
@@ -150,7 +152,7 @@ if __name__ == '__main__':
 
     """get user --item -- entity"""
     user_entity_mat_list=find_user_entity_neigh(adj_mat_list,n_users,n_nodes)
-    prefer_graph,exist_nodes=build_prefer_graph(user_entity_mat_list)
+    prefer_graphs,exist_nodes=build_prefer_graph(user_entity_mat_list)
     n_params['n_prefers']=len(user_entity_mat_list)
     print("n_user:",n_users)
     print("n_items:",n_items)
@@ -164,7 +166,7 @@ if __name__ == '__main__':
 
 
     """define model"""
-    model = Recommender(n_params, args, graph, mean_mat_list[0],prefer_graph).to(device)
+    model = Recommender(n_params, args, graph, mean_mat_list[0],prefer_graphs).to(device)
 
 
     # model = Recommender(n_params, args, graph, mean_mat_list[0],prefer_graph)
@@ -181,8 +183,8 @@ if __name__ == '__main__':
 
     print("start training ...")
     for epoch in range(args.epoch):
-        # if hasattr(torch.cuda, 'empty_cache'):
-        #     torch.cuda.empty_cache()
+        # # if hasattr(torch.cuda, 'empty_cache'):
+        # #     torch.cuda.empty_cache()
         # '''test'''
         # test_s_t = time()
         # ret = test(model, user_dict, n_params)

@@ -33,6 +33,7 @@ def parse_args():
                         help='Specify the test type from {part, full}, indicating whether the reference is done in mini-batch')
     parser.add_argument("--n_factors", type=int, default=4, help="number of latent factor for user favour")
 
+    parser.add_argument("--keep_rate",type=float,default=1,help="keep rate for extra edges")
     # ===== relation context ===== #
     parser.add_argument('--context_hops', type=int, default=3, help='number of context hops')
 
