@@ -11,7 +11,7 @@ def parse_args():
     )
 
     # ===== train ===== #
-    parser.add_argument('--epoch', type=int, default=100, help='number of epochs')
+    parser.add_argument('--epoch', type=int, default=500, help='number of epochs')
     parser.add_argument('--batch_size', type=int, default=1024, help='batch size')
     parser.add_argument('--batch_size_kg', type=int, default=1024, help='batch size for kg')
     parser.add_argument('--batch_size_cl', type=int, default=1024, help='batch size for cl')

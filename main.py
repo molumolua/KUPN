@@ -153,7 +153,9 @@ if __name__ == '__main__':
     """get user --item -- entity"""
     user_entity_mat_list=find_user_entity_neigh(adj_mat_list,n_users,n_nodes)
     prefer_graphs,exist_nodes=build_prefer_graph(user_entity_mat_list)
+    exist_nodes=[i for i in range(n_items+n_users)] #cl部分
     n_params['n_prefers']=len(user_entity_mat_list)
+    
     print("n_user:",n_users)
     print("n_items:",n_items)
     print("n_entities:",n_entities)
@@ -260,7 +262,7 @@ if __name__ == '__main__':
             # early stopping when cur_best_pre_0 is decreasing for ten successive steps.
             cur_best_pre_0, stopping_step, should_stop = early_stopping(ret['recall'][0], cur_best_pre_0,
                                                                         stopping_step, expected_order='acc',
-                                                                        flag_step=10)
+                                                                        flag_step=20)
             if should_stop:
                 break
 
