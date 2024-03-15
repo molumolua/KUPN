@@ -122,7 +122,7 @@ def build_sparse_relational_graph(relation_dict):
         np_mat = np.array(relation_dict[r_id])
         if r_id == 0:
             cf = np_mat.copy()
-            cf[:, 1] = cf[:, 1] + n_users  # [0, n_items) -> [n_users, n_users+n_items) remap item
+            cf[:, 1] = cf[:, 1]  # [0, n_items) -> [n_users, n_users+n_items) remap item
             vals = [1.] * len(cf)
             adj = sp.coo_matrix((vals, (cf[:, 0], cf[:, 1])), shape=(n_nodes, n_nodes))
         else:

@@ -148,7 +148,7 @@ class Aggregator(nn.Module):
     #     """aggregate"""
     #     dim=all_emb.shape[0]
     #     head, tail = edge_index
-    #     edge_relation_emb = weight[edge_type]  # exclude interact, remap [1, n_relations) to [0, n_relations-1)
+    #     edge_relation_emb = weight[edge_type]
     #     neigh_relation_emb = all_emb[tail] * edge_relation_emb  # [-1, channel]
     #     if aug_edge_weight is not None:
     #         neigh_relation_emb = neigh_relation_emb*aug_edge_weight
@@ -217,15 +217,13 @@ class GraphConv(nn.Module):
         self.tau_prefer=tau_prefer
         self.tau_kg=tau_kg
 
-        self.temperature = 0.2
-
         initializer = nn.init.xavier_uniform_
         # 关系的embedding
         weight = initializer(torch.empty(n_relations - 1, channel))  # not include interact
         self.weight = nn.Parameter(weight)  # [n_relations - 1, in_channel]
 
         # user-entity
-        extra_weight = initializer(torch.empty(n_prefers, channel))  # not include interact
+        extra_weight = initializer(torch.empty(n_prefers, channel))
         self.extra_weight = nn.Parameter(extra_weight)  # [n_relations - 1, in_channel]
 
         for i in range(n_hops):
@@ -233,8 +231,8 @@ class GraphConv(nn.Module):
 
         self.dropout = nn.Dropout(p=mess_dropout_rate)  # mess dropout
 
-        self.drop_learner1 = DropLearner(channel)
-        self.drop_learner2 = DropLearner(channel)
+        # self.drop_learner1 = DropLearner(channel)
+        # self.drop_learner2 = DropLearner(channel)
 
     def _edge_sampling(self, edge_index, edge_type, rate=0.5):
         # edge_index: [2, -1]
@@ -288,6 +286,7 @@ class GraphConv(nn.Module):
         
         node_emb  = torch.concat([user_emb,entity_emb],dim=0)     # [n_nodes, channel]
         node_res_emb = node_emb
+        user_res_emb = user_emb
 
         # user_res_emb = [user_emb]
 
@@ -301,15 +300,16 @@ class GraphConv(nn.Module):
                                                  aug_edge_weight,aug_extra_edge_weight)
             
 
-            # user_emb =torch.sparse.mm(interact_mat,entity_emb)
+            user_emb =torch.sparse.mm(interact_mat,entity_emb)
             """message dropout"""
             if mess_dropout:
                 entity_emb = self.dropout(entity_emb)
                 node_emb = self.dropout(node_emb)
-                # user_emb = self.dropout(user_emb)
+                user_emb = self.dropout(user_emb)
 
             entity_emb = F.normalize(entity_emb)
             node_emb = F.normalize(node_emb)
+            user_emb = F.normalize(user_emb)
         
 
 
@@ -318,13 +318,15 @@ class GraphConv(nn.Module):
             node_res_emb = torch.add(node_res_emb, node_emb)
             # user_res_emb +=[user_emb]
 
+            user_res_emb = torch.add(user_res_emb, user_emb)
+
         # user_res_emb =torch.stack(user_res_emb,dim=1)
         # user_res_emb =torch.mean(user_res_emb,dim=1)
 
 
-        user_res_emb=torch.sparse.mm(interact_mat,entity_res_emb)
         gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
         return gcn_res_emb,node_res_emb
+
 
 
 class Recommender(nn.Module):
@@ -402,9 +404,11 @@ class Recommender(nn.Module):
 
     def _convert_sp_mat_to_sp_tensor(self, X):
         coo = X.tocoo()
-        i = torch.LongTensor([coo.row, coo.col-self.n_users])
+        print("min index:",min(coo.col))
+        i = torch.LongTensor([coo.row, coo.col])
         v = torch.from_numpy(coo.data).float()
         return torch.sparse.FloatTensor(i, v, [self.n_users,self.n_entities])
+    
 
     def _get_indices(self, X):
         coo = X.tocoo()
@@ -433,9 +437,10 @@ class Recommender(nn.Module):
             else:
                 random_numbers = torch.rand(index.size(1))
             # 根据 keep_rate 确定哪些行会被保留
-            mask = random_numbers < keep_rate
+            mask = random_numbers <= keep_rate
 
             left_index=index[:,mask]
+            # print("type:",itype,"chosen:",left_index.shape)
             if(left_index.shape[1]>0):
                 left_type=torch.full([left_index.shape[1]],itype)
                 select_indexs.append(left_index)

@@ -64,21 +64,25 @@ def generate_train_cl_batch(exist_items,batch_size_cl):
 def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
     #返回一个 user-entity的邻接矩阵列表
     tot=0
-    inter_adj = adj_mat_list[0].tocsr()
+    inter_adj = adj_mat_list[0].copy()
+    # print("min inter_adj_col:",min(inter_adj.col))
+    inter_adj = inter_adj.tocsr()
     return_adj_mat_list = []
     for r_id,adj in enumerate(adj_mat_list):
         now_adj=None
         if(r_id==0):
             now_adj=adj.copy()
+            # now_adj=sp.coo_matrix((adj.data, (adj.row, adj.col)), shape=adj.shape)
         else:
             knowleadge_adj = adj.tocsr()
             now_adj=inter_adj @ knowleadge_adj
             now_adj=now_adj.tocoo()
-            now_adj.col+=n_users  #remap entities
+            # now_adj.col+=n_users  #remap entities
+
+        # now_adj=sp.coo_matrix((now_adj.data, (now_adj.row, now_adj.col+n_users)), shape=now_adj.shape)
+        now_adj.col+=n_users  # remap adj
         count=now_adj.data.size
         tot+=count
-        if(count==0):
-            continue
         # ''' show user entity information'''
         # print("latent relation : "+str(r_id)+" count: "+str(count))
         # values, counts = np.unique(now_adj.data, return_counts=True)
@@ -94,10 +98,11 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
 
         # need test        
         # now_adj.data = np.ones_like(now_adj.data)
+        if(count==0):
+            continue
 
-
-
-        assert now_adj.col.all() <n_nodes
+        assert max(now_adj.col) <n_nodes
+        assert min(now_adj.col) >=n_users
         return_adj_mat_list.append(now_adj)
     print("total prefer relations:",tot)
     new_coo_matrices = []
@@ -155,7 +160,7 @@ if __name__ == '__main__':
     prefer_graphs,exist_nodes=build_prefer_graph(user_entity_mat_list)
     exist_nodes=[i for i in range(n_items+n_users)] #cl部分
     n_params['n_prefers']=len(user_entity_mat_list)
-    
+
     print("n_user:",n_users)
     print("n_items:",n_items)
     print("n_entities:",n_entities)
