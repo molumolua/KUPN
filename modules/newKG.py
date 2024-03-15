@@ -144,56 +144,56 @@ class Aggregator(nn.Module):
         self.n_nodes = n_nodes
         self.n_relations=n_relations
     
-    # def forward(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None):
-    #     """aggregate"""
-    #     dim=all_emb.shape[0]
-    #     head, tail = edge_index
-    #     edge_relation_emb = weight[edge_type]
-    #     neigh_relation_emb = all_emb[tail] * edge_relation_emb  # [-1, channel]
-    #     if aug_edge_weight is not None:
-    #         neigh_relation_emb = neigh_relation_emb*aug_edge_weight
-    #     res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
-    #     return res_emb
-    
-
-    def forward(self, entity_emb, user_emb,  #n种隐关系向量  [n_relations,latend_dim]
-                edge_index, edge_type, extra_edge_index, extra_edge_type,  #替换成二阶+一阶 n_relations个矩阵   [n_relations,n_users,n_nodes]
-                weight,extra_weight,aug_edge_weight=None,aug_extra_edge_weight=None):
-
-        n_entities = entity_emb.shape[0]
-        # channel = entity_emb.shape[1]
-        # n_users = self.n_users
-        n_nodes = self.n_nodes
-        # n_relations=self.n_relations
-
-        """KG aggregate"""
+    def forward(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None):
+        """aggregate"""
+        dim=all_emb.shape[0]
         head, tail = edge_index
-        edge_relation_emb = weight[edge_type - 1]  # exclude interact, remap [1, n_relations) to [0, n_relations-1)
-        neigh_relation_emb = entity_emb[tail] * edge_relation_emb  # [-1, channel]
+        edge_relation_emb = weight[edge_type]
+        neigh_relation_emb = all_emb[tail] * edge_relation_emb  # [-1, channel]
         if aug_edge_weight is not None:
             neigh_relation_emb = neigh_relation_emb*aug_edge_weight
-        entity_agg = scatter_mean(src=neigh_relation_emb, index=head, dim_size=n_entities, dim=0)
+        res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
+        return res_emb
+    
 
-        # """cul user->latent factor attention"""
-        # score_ = torch.mm(user_emb, latent_emb.t())
-        # score = nn.Softmax(dim=1)(score_).unsqueeze(-1)  # [n_users, n_relations, 1]
+    # def forward(self, entity_emb, user_emb,  #n种隐关系向量  [n_relations,latend_dim]
+    #             edge_index, edge_type, extra_edge_index, extra_edge_type,  #替换成二阶+一阶 n_relations个矩阵   [n_relations,n_users,n_nodes]
+    #             weight,extra_weight,aug_edge_weight=None,aug_extra_edge_weight=None):
 
-        # """user aggregate"""
-        # user_agg = torch.sparse.mm(interact_mat, entity_emb)  # [n_users, channel]
-        # disen_weight = torch.mm(nn.Softmax(dim=-1)(disen_weight_att),
-        #                         weight).expand(n_users, n_relations, channel)
-        # user_agg = user_agg * (disen_weight * score).sum(dim=1) + user_agg  # [n_users, channel]
+    #     n_entities = entity_emb.shape[0]
+    #     # channel = entity_emb.shape[1]
+    #     # n_users = self.n_users
+    #     n_nodes = self.n_nodes
+    #     # n_relations=self.n_relations
 
-        """user prefer view aggregate"""
-        all_embed= torch.concat([user_emb,entity_emb],dim=0)
-        extra_head, extra_tail = extra_edge_index
-        extra_edge_relation_emb = extra_weight[extra_edge_type]  #prefer
-        extra_neigh_relation_emb = all_embed[extra_tail] * extra_edge_relation_emb  # [-1, channel]
-        if aug_extra_edge_weight is not None:
-            extra_neigh_relation_emb =extra_neigh_relation_emb*aug_extra_edge_weight
+    #     """KG aggregate"""
+    #     head, tail = edge_index
+    #     edge_relation_emb = weight[edge_type - 1]  # exclude interact, remap [1, n_relations) to [0, n_relations-1)
+    #     neigh_relation_emb = entity_emb[tail] * edge_relation_emb  # [-1, channel]
+    #     if aug_edge_weight is not None:
+    #         neigh_relation_emb = neigh_relation_emb*aug_edge_weight
+    #     entity_agg = scatter_mean(src=neigh_relation_emb, index=head, dim_size=n_entities, dim=0)
 
-        node_agg = scatter_mean(src=extra_neigh_relation_emb, index=extra_head, dim_size=n_nodes, dim=0)
-        return entity_agg, node_agg
+    #     # """cul user->latent factor attention"""
+    #     # score_ = torch.mm(user_emb, latent_emb.t())
+    #     # score = nn.Softmax(dim=1)(score_).unsqueeze(-1)  # [n_users, n_relations, 1]
+
+    #     # """user aggregate"""
+    #     # user_agg = torch.sparse.mm(interact_mat, entity_emb)  # [n_users, channel]
+    #     # disen_weight = torch.mm(nn.Softmax(dim=-1)(disen_weight_att),
+    #     #                         weight).expand(n_users, n_relations, channel)
+    #     # user_agg = user_agg * (disen_weight * score).sum(dim=1) + user_agg  # [n_users, channel]
+
+    #     """user prefer view aggregate"""
+    #     all_embed= torch.concat([user_emb,entity_emb],dim=0)
+    #     extra_head, extra_tail = extra_edge_index
+    #     extra_edge_relation_emb = extra_weight[extra_edge_type]  #prefer
+    #     extra_neigh_relation_emb = all_embed[extra_tail] * extra_edge_relation_emb  # [-1, channel]
+    #     if aug_extra_edge_weight is not None:
+    #         extra_neigh_relation_emb =extra_neigh_relation_emb*aug_extra_edge_weight
+
+    #     node_agg = scatter_mean(src=extra_neigh_relation_emb, index=extra_head, dim_size=n_nodes, dim=0)
+    #     return entity_agg, node_agg
 
 
 
@@ -286,18 +286,18 @@ class GraphConv(nn.Module):
         
         node_emb  = torch.concat([user_emb,entity_emb],dim=0)     # [n_nodes, channel]
         node_res_emb = node_emb
-        user_res_emb = user_emb
+        # user_res_emb = user_emb
 
-        # user_res_emb = [user_emb]
+        user_res_emb = [user_emb]
 
         for i in range(len(self.convs)):
-            # #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
-            # entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight,aug_edge_weight)
-            # node_emb = self.convs[i](node_emb,extra_edge_index,extra_edge_type,self.extra_weight,aug_extra_edge_weight)
-            entity_emb, node_emb = self.convs[i](entity_emb, node_emb[:self.n_users], 
-                                                 edge_index, edge_type,extra_edge_index, extra_edge_type,
-                                                 self.weight,self.extra_weight,
-                                                 aug_edge_weight,aug_extra_edge_weight)
+            #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
+            entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight,aug_edge_weight)
+            node_emb = self.convs[i](node_emb,extra_edge_index,extra_edge_type,self.extra_weight,aug_extra_edge_weight)
+            # entity_emb, node_emb = self.convs[i](entity_emb, node_emb[:self.n_users], 
+            #                                      edge_index, edge_type,extra_edge_index, extra_edge_type,
+            #                                      self.weight,self.extra_weight,
+            #                                      aug_edge_weight,aug_extra_edge_weight)
             
 
             user_emb =torch.sparse.mm(interact_mat,entity_emb)
@@ -316,12 +316,13 @@ class GraphConv(nn.Module):
             """result emb"""
             entity_res_emb = torch.add(entity_res_emb, entity_emb)
             node_res_emb = torch.add(node_res_emb, node_emb)
-            # user_res_emb +=[user_emb]
 
-            user_res_emb = torch.add(user_res_emb, user_emb)
+            user_res_emb +=[user_emb]
 
-        # user_res_emb =torch.stack(user_res_emb,dim=1)
-        # user_res_emb =torch.mean(user_res_emb,dim=1)
+            # user_res_emb = torch.add(user_res_emb, user_emb)
+
+        user_res_emb =torch.stack(user_res_emb,dim=1)
+        user_res_emb =torch.mean(user_res_emb,dim=1)
 
 
         gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
@@ -404,7 +405,7 @@ class Recommender(nn.Module):
 
     def _convert_sp_mat_to_sp_tensor(self, X):
         coo = X.tocoo()
-        print("min index:",min(coo.col))
+        # print("min index:",min(coo.col))
         i = torch.LongTensor([coo.row, coo.col])
         v = torch.from_numpy(coo.data).float()
         return torch.sparse.FloatTensor(i, v, [self.n_users,self.n_entities])

@@ -80,7 +80,7 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
             # now_adj.col+=n_users  #remap entities
 
         # now_adj=sp.coo_matrix((now_adj.data, (now_adj.row, now_adj.col+n_users)), shape=now_adj.shape)
-        now_adj.col+=n_users  # remap adj
+        now_adj.col+=n_users  # remap entities
         count=now_adj.data.size
         tot+=count
         # ''' show user entity information'''
@@ -116,16 +116,13 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
 
 def build_prefer_graph(adj_mat_list):
     prefer_graphs=[]
-    exist_nodes=set()
     for r_id,adj in enumerate(adj_mat_list):
         prefer_graph = nx.MultiDiGraph()
         for h_id, t_id, v in zip(adj.row, adj.col, adj.data):
             prefer_graph.add_edge(h_id, t_id, key=r_id)
-            exist_nodes.add(h_id)
-            exist_nodes.add(t_id)
         prefer_graphs.append(prefer_graph)
 
-    return prefer_graphs,list(exist_nodes)
+    return prefer_graphs
 
 
 
@@ -144,7 +141,7 @@ if __name__ == '__main__':
     global args, device
     args = parse_args()
     device = torch.device("cuda:"+str(args.gpu_id)) if args.cuda else torch.device("cpu")
-    # device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
+
     """build dataset"""
     train_cf, test_cf, user_dict, n_params, graph, mat_list,all_kg_dict = load_data(args)
     adj_mat_list, norm_mat_list, mean_mat_list = mat_list
@@ -157,7 +154,7 @@ if __name__ == '__main__':
 
     """get user --item -- entity"""
     user_entity_mat_list=find_user_entity_neigh(adj_mat_list,n_users,n_nodes)
-    prefer_graphs,exist_nodes=build_prefer_graph(user_entity_mat_list)
+    prefer_graphs=build_prefer_graph(user_entity_mat_list)
     exist_nodes=[i for i in range(n_items+n_users)] #cl部分
     n_params['n_prefers']=len(user_entity_mat_list)
 
