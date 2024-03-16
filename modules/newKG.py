@@ -155,6 +155,43 @@ class Aggregator(nn.Module):
         res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
         return res_emb
     
+    def generate(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,batch_size=1024):
+        """aggregate"""
+        dim = all_emb.shape[0]
+        channel = all_emb.shape[1]
+        head, tail = edge_index
+        # 初始化用于累积贡献总和和度数的张量
+        contrib_sum = torch.zeros(dim, channel).to(all_emb.device)
+        degrees = torch.zeros(dim).to(all_emb.device)
+
+        n_batches = (edge_index.shape[1] + batch_size - 1) // batch_size
+        for b in range(n_batches):
+            start_idx = b * batch_size
+            # print(start_idx,edge_index.shape[1])
+            end_idx = min((b + 1) * batch_size, edge_index.shape[1])
+
+            head_batch = head[start_idx:end_idx]
+            tail_batch = tail[start_idx:end_idx]
+            edge_type_batch = edge_type[start_idx:end_idx]
+
+            edge_relation_emb_batch = weight[edge_type_batch]
+            neigh_relation_emb_batch = all_emb[tail_batch] * edge_relation_emb_batch
+
+            if aug_edge_weight is not None:
+                aug_edge_weight_batch = aug_edge_weight[start_idx:end_idx]
+                neigh_relation_emb_batch *= aug_edge_weight_batch.unsqueeze(-1)
+
+            # 累加当前批次的贡献
+            contrib_sum.index_add_(0, head_batch, neigh_relation_emb_batch)
+            # 累加当前批次每个节点的出现次数
+            degrees.index_add_(0, head_batch, torch.ones_like(head_batch, dtype=torch.float))
+
+        # 计算平均贡献：将贡献总和除以度数
+        # 避免除以零，对度数为零的节点使用1进行替代
+        degrees[degrees == 0] = 1
+        res_emb = contrib_sum / degrees.unsqueeze(-1)
+        return res_emb
+    
 
     # def forward(self, entity_emb, user_emb,  #n种隐关系向量  [n_relations,latend_dim]
     #             edge_index, edge_type, extra_edge_index, extra_edge_type,  #替换成二阶+一阶 n_relations个矩阵   [n_relations,n_users,n_nodes]
@@ -207,7 +244,6 @@ class GraphConv(nn.Module):
         super(GraphConv, self).__init__()
         #channel ---> embedding size
         self.convs = nn.ModuleList()
-        self.interact_mat = interact_mat
         self.n_relations = n_relations
         self.n_users = n_users
 
@@ -286,9 +322,9 @@ class GraphConv(nn.Module):
         
         node_emb  = torch.concat([user_emb,entity_emb],dim=0)     # [n_nodes, channel]
         node_res_emb = node_emb
-        # user_res_emb = user_emb
+        user_res_emb = user_emb
 
-        user_res_emb = [user_emb]
+        # user_res_emb = [user_emb]
 
         for i in range(len(self.convs)):
             #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
@@ -317,12 +353,56 @@ class GraphConv(nn.Module):
             entity_res_emb = torch.add(entity_res_emb, entity_emb)
             node_res_emb = torch.add(node_res_emb, node_emb)
 
-            user_res_emb +=[user_emb]
+            # user_res_emb +=[user_emb]
 
-            # user_res_emb = torch.add(user_res_emb, user_emb)
+            user_res_emb = torch.add(user_res_emb, user_emb)
 
-        user_res_emb =torch.stack(user_res_emb,dim=1)
-        user_res_emb =torch.mean(user_res_emb,dim=1)
+        # user_res_emb =torch.stack(user_res_emb,dim=1)
+        # user_res_emb =torch.mean(user_res_emb,dim=1)
+
+
+        gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
+        return gcn_res_emb,node_res_emb
+    
+    def generate(self, user_emb, entity_emb,  interact_mat,edge_index, edge_type,
+               extra_edge_index,extra_edge_type):
+        
+        entity_res_emb = entity_emb                               # [n_entity, channel]
+        
+        node_emb  = torch.concat([user_emb,entity_emb],dim=0)     # [n_nodes, channel]
+        node_res_emb = node_emb
+        user_res_emb = user_emb
+
+        # user_res_emb = [user_emb]
+        with torch.no_grad():
+            for i in range(len(self.convs)):
+                #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
+                entity_emb = self.convs[i].generate(entity_emb,edge_index,edge_type-1,self.weight)
+                node_emb = self.convs[i].generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight)
+                # entity_emb, node_emb = self.convs[i](entity_emb, node_emb[:self.n_users], 
+                #                                      edge_index, edge_type,extra_edge_index, extra_edge_type,
+                #                                      self.weight,self.extra_weight,
+                #                                      aug_edge_weight,aug_extra_edge_weight)
+                
+
+                user_emb =torch.sparse.mm(interact_mat,entity_emb)
+
+                entity_emb = F.normalize(entity_emb)
+                node_emb = F.normalize(node_emb)
+                user_emb = F.normalize(user_emb)
+            
+
+
+                """result emb"""
+                entity_res_emb = torch.add(entity_res_emb, entity_emb)
+                node_res_emb = torch.add(node_res_emb, node_emb)
+
+                # user_res_emb +=[user_emb]  #old
+
+                user_res_emb = torch.add(user_res_emb, user_emb)  #new
+
+        # user_res_emb =torch.stack(user_res_emb,dim=1)
+        # user_res_emb =torch.mean(user_res_emb,dim=1)
 
 
         gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
@@ -426,7 +506,7 @@ class Recommender(nn.Module):
         for graph in graphs:
             graph_tensor = torch.tensor(list(graph.edges))  # [-1, 3]
             index = graph_tensor[:, :-1]  # [-1, 2]
-            indexs.append(index.t().long().to(self.device))
+            indexs.append(index.t().long().cpu())
         return indexs
     
     def _select_edges(self,indexs,keep_rate):
@@ -514,17 +594,14 @@ class Recommender(nn.Module):
     def generate(self):
         user_emb = self.all_embed[:self.n_users, :]
         item_emb = self.all_embed[self.n_users:, :]
-        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.keep_rate)
-        node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
+        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,1)
+        node_gcn_emb, node_prefer_emb =     self.gcn.generate(user_emb,
                                                      item_emb,
                                                      self.interact_mat,
                                                      self.edge_index,
                                                      self.edge_type,
                                                      extra_edge_index,
-                                                     extra_edge_type,
-                                                     mess_dropout=False,
-                                                     node_dropout=False,
-                                                     drop_learn=True)
+                                                     extra_edge_type)
         
         user_prefer_emb=node_prefer_emb[:self.n_users]
         entity_prefer_emb=node_prefer_emb[self.n_users:]

@@ -187,9 +187,11 @@ if __name__ == '__main__':
 
     print("start training ...")
     for epoch in range(args.epoch):
-        # # if hasattr(torch.cuda, 'empty_cache'):
-        # #     torch.cuda.empty_cache()
-        # '''test'''
+        # if hasattr(torch.cuda, 'empty_cache'):
+        #     torch.cuda.empty_cache()
+        # model=model.train()
+        '''test'''
+        # model=model.eval()
         # test_s_t = time()
         # ret = test(model, user_dict, n_params)
         # test_e_t = time()
@@ -249,6 +251,7 @@ if __name__ == '__main__':
 
         if epoch % 1 == 0 :
             """testing"""
+            # model=model.eval()
             test_s_t = time()
             ret = test(model, user_dict, n_params)
             test_e_t = time()
