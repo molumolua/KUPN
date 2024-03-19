@@ -180,7 +180,7 @@ if __name__ == '__main__':
 
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
+    # cl_optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     cur_best_pre_0 = 0
     stopping_step = 0
     should_stop = False
@@ -279,4 +279,4 @@ if __name__ == '__main__':
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
             print('using time %.4f,  epoch %d: training loss: %.4f  cl loss: %.4f' % (train_cl_e - train_s_t, epoch, loss.item(),cl_loss.item()))
 
-    print('early stopping at %d, recall@20:%.4f' % (epoch, cur_best_pre_0))
+    print('early stopping at %d, recall@10:%.4f' % (epoch, cur_best_pre_0))

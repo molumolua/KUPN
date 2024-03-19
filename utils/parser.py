@@ -34,6 +34,7 @@ def parse_args():
     parser.add_argument("--n_factors", type=int, default=4, help="number of latent factor for user favour")
 
     parser.add_argument("--keep_rate",type=float,default=1,help="keep rate for extra edges")
+    parser.add_argument("--method",type=str,default="add",help="convolution method for user, add or stack")
     # ===== relation context ===== #
     parser.add_argument('--context_hops', type=int, default=3, help='number of context hops')
 

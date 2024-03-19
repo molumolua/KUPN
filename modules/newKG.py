@@ -293,7 +293,7 @@ class GraphConv(nn.Module):
         return out * (1. / (1 - rate))
 
     def forward(self, user_emb, entity_emb,  interact_mat,edge_index, edge_type,
-               extra_edge_index,extra_edge_type,mess_dropout=True, node_dropout=False,drop_learn=False):
+               extra_edge_index,extra_edge_type,mess_dropout=True, node_dropout=False,drop_learn=False,method="add"):
         # edge_index=edge_index.to(user_emb.device)
         # edge_type=edge_type.to(user_emb.device)
         # extra_edge_index=extra_edge_index.to(user_emb.device)
@@ -322,9 +322,13 @@ class GraphConv(nn.Module):
         
         node_emb  = torch.concat([user_emb,entity_emb],dim=0)     # [n_nodes, channel]
         node_res_emb = node_emb
-        user_res_emb = user_emb
+        if method == "add":
+            user_res_emb = user_emb
+        elif method =="stack":
+            user_res_emb = [user_emb]
+        else:
+            raise NotImplementedError
 
-        # user_res_emb = [user_emb]
 
         for i in range(len(self.convs)):
             #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
@@ -352,13 +356,16 @@ class GraphConv(nn.Module):
             """result emb"""
             entity_res_emb = torch.add(entity_res_emb, entity_emb)
             node_res_emb = torch.add(node_res_emb, node_emb)
-
-            # user_res_emb +=[user_emb]
-
-            user_res_emb = torch.add(user_res_emb, user_emb)
-
-        # user_res_emb =torch.stack(user_res_emb,dim=1)
-        # user_res_emb =torch.mean(user_res_emb,dim=1)
+            if method == "add":
+                user_res_emb = torch.add(user_res_emb, user_emb)
+            elif method =="stack":
+                user_res_emb +=[user_emb]
+            else:
+                raise NotImplementedError
+            
+        if method == "stack":
+            user_res_emb =torch.stack(user_res_emb,dim=1)
+            user_res_emb =torch.mean(user_res_emb,dim=1)
 
 
         gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
@@ -438,6 +445,7 @@ class Recommender(nn.Module):
         self.tau_kg=args_config.tau_kg
         self.tau_cl=args_config.tau_cl
         self.keep_rate=args_config.keep_rate
+        self.method=args_config.method
 
         self.device = torch.device("cuda:" + str(args_config.gpu_id)) if args_config.cuda \
                                                                       else torch.device("cpu")
@@ -549,7 +557,8 @@ class Recommender(nn.Module):
                                                      extra_edge_type,
                                                      mess_dropout=self.mess_dropout,
                                                      node_dropout=self.node_dropout,
-                                                     drop_learn=True)
+                                                     drop_learn=True,
+                                                     method=self.method)
         user_prefer_emb=node_prefer_emb[:self.n_users]
         entity_prefer_emb=node_prefer_emb[self.n_users:]
 
@@ -581,7 +590,8 @@ class Recommender(nn.Module):
                                                      extra_edge_type,
                                                      mess_dropout=self.mess_dropout,
                                                      node_dropout=self.node_dropout,
-                                                     drop_learn=True)
+                                                     drop_learn=True,
+                                                     method=self.method)
         # user_prefer_emb=node_prefer_emb[:self.n_users]
         # entity_prefer_emb=node_prefer_emb[self.n_users:]
 
@@ -594,14 +604,25 @@ class Recommender(nn.Module):
     def generate(self):
         user_emb = self.all_embed[:self.n_users, :]
         item_emb = self.all_embed[self.n_users:, :]
-        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,1)
-        node_gcn_emb, node_prefer_emb =     self.gcn.generate(user_emb,
+        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.keep_rate)
+        # node_gcn_emb, node_prefer_emb =     self.gcn.generate(user_emb,
+        #                                              item_emb,
+        #                                              self.interact_mat,
+        #                                              self.edge_index,
+        #                                              self.edge_type,
+        #                                              extra_edge_index,
+        #                                              extra_edge_type)
+        node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
                                                      item_emb,
                                                      self.interact_mat,
                                                      self.edge_index,
                                                      self.edge_type,
                                                      extra_edge_index,
-                                                     extra_edge_type)
+                                                     extra_edge_type,
+                                                     mess_dropout=False,
+                                                     node_dropout=False,
+                                                     drop_learn=True,
+                                                     method=self.method)
         
         user_prefer_emb=node_prefer_emb[:self.n_users]
         entity_prefer_emb=node_prefer_emb[self.n_users:]
