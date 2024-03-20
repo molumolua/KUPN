@@ -75,7 +75,7 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
             # now_adj=sp.coo_matrix((adj.data, (adj.row, adj.col)), shape=adj.shape)
         else:
             knowleadge_adj = adj.tocsr()
-            now_adj=inter_adj @ knowleadge_adj
+            now_adj=inter_adj @ knowleadge_adj #user 和 item --》entity
             now_adj=now_adj.tocoo()
             # now_adj.col+=n_users  #remap entities
 

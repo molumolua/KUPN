@@ -155,7 +155,7 @@ class Aggregator(nn.Module):
         res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
         return res_emb
     
-    def generate(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,batch_size=1024):
+    def batch_generate(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,batch_size=1024):
         """aggregate"""
         dim = all_emb.shape[0]
         channel = all_emb.shape[1]
@@ -371,7 +371,7 @@ class GraphConv(nn.Module):
         gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
         return gcn_res_emb,node_res_emb
     
-    def generate(self, user_emb, entity_emb,  interact_mat,edge_index, edge_type,
+    def batch_generate(self, user_emb, entity_emb,  interact_mat,edge_index, edge_type,
                extra_edge_index,extra_edge_type):
         
         entity_res_emb = entity_emb                               # [n_entity, channel]
@@ -384,8 +384,8 @@ class GraphConv(nn.Module):
         with torch.no_grad():
             for i in range(len(self.convs)):
                 #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
-                entity_emb = self.convs[i].generate(entity_emb,edge_index,edge_type-1,self.weight)
-                node_emb = self.convs[i].generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight)
+                entity_emb = self.convs[i].batch_generate(entity_emb,edge_index,edge_type-1,self.weight)
+                node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight)
                 # entity_emb, node_emb = self.convs[i](entity_emb, node_emb[:self.n_users], 
                 #                                      edge_index, edge_type,extra_edge_index, extra_edge_type,
                 #                                      self.weight,self.extra_weight,
