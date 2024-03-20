@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from time import time
 from utils.scatter import scatter_mean
 class Contrast_2view(nn.Module):
     def __init__(self, cf_dim, kg_dim, hidden_dim, tau, cl_size):
@@ -277,6 +278,16 @@ class GraphConv(nn.Module):
         random_indices = np.random.choice(n_edges, size=int(n_edges * rate), replace=False)
         return edge_index[:, random_indices], edge_type[random_indices]
 
+    def _edge_sampling_torch(self,edge_index, edge_type, rate=0.5):
+        n_edges = edge_index.size(1)
+        # 使用torch.rand生成一个[0, 1)区间的随机张量，然后选择小于给定采样率的索引
+        mask = torch.rand(n_edges, device=edge_index.device) < rate
+        # 应用掩码选择索引
+        sampled_edge_index = edge_index[:, mask]
+        sampled_edge_type = edge_type[mask]
+        return sampled_edge_index, sampled_edge_type
+
+
     def _sparse_dropout(self, x, rate=0.5):
         noise_shape = x._nnz()
 
@@ -302,10 +313,9 @@ class GraphConv(nn.Module):
 
         """node dropout"""
         if node_dropout:
-            edge_index, edge_type = self._edge_sampling(edge_index, edge_type, self.node_dropout_rate)
-            extra_edge_index, extra_edge_type = self._edge_sampling(extra_edge_index, extra_edge_type, self.node_dropout_rate)
+            edge_index, edge_type = self._edge_sampling_torch(edge_index, edge_type, self.node_dropout_rate)
+            extra_edge_index, extra_edge_type = self._edge_sampling_torch(extra_edge_index, extra_edge_type, self.node_dropout_rate)
             interact_mat = self._sparse_dropout(interact_mat, self.node_dropout_rate)
-        
         aug_edge_weight,aug_extra_edge_weight=None,None
 
         # if drop_learn:
@@ -514,7 +524,7 @@ class Recommender(nn.Module):
         for graph in graphs:
             graph_tensor = torch.tensor(list(graph.edges))  # [-1, 3]
             index = graph_tensor[:, :-1]  # [-1, 2]
-            indexs.append(index.t().long().cpu())
+            indexs.append(index.long().cpu())
         return indexs
     
     def _select_edges(self,indexs,keep_rate):
@@ -522,19 +532,19 @@ class Recommender(nn.Module):
         select_types=[]
         for itype,index in enumerate(indexs):
             if itype ==0 or itype*2==self.n_prefers:
-                random_numbers =torch.full([index.size(1)],0)
+                random_numbers =torch.full([index.size(0)],0)
             else:
-                random_numbers = torch.rand(index.size(1))
+                random_numbers = torch.rand(index.size(0))
             # 根据 keep_rate 确定哪些行会被保留
             mask = random_numbers <= keep_rate
 
-            left_index=index[:,mask]
+            left_index=index[mask,:]
             # print("type:",itype,"chosen:",left_index.shape)
-            if(left_index.shape[1]>0):
-                left_type=torch.full([left_index.shape[1]],itype)
+            if(left_index.shape[0]>0):
+                left_type=torch.full([left_index.shape[0]],itype)
                 select_indexs.append(left_index)
                 select_types.append(left_type)
-        return torch.concat(select_indexs,dim=1).to(self.device),torch.concat(select_types,dim=0).to(self.device)
+        return torch.concat(select_indexs,dim=0).t().to(self.device),torch.concat(select_types,dim=0).to(self.device)
 
     def forward(self, batch=None):
         user = batch['users']
@@ -559,20 +569,18 @@ class Recommender(nn.Module):
                                                      node_dropout=self.node_dropout,
                                                      drop_learn=True,
                                                      method=self.method)
+
+        
         user_prefer_emb=node_prefer_emb[:self.n_users]
         entity_prefer_emb=node_prefer_emb[self.n_users:]
 
         user_gcn_emb=node_gcn_emb[:self.n_users]
         entity_gcn_emb=node_gcn_emb[self.n_users:]
-
-
         user_res_emb=torch.concat([user_gcn_emb,user_prefer_emb],dim=1)
         entity_res_emb=torch.concat([entity_gcn_emb,entity_prefer_emb],dim=1)
 
-
         u_e = user_res_emb[user]
         pos_e, neg_e = entity_res_emb[pos_item], entity_res_emb[neg_item]
-
 
         return self.create_bpr_loss(u_e, pos_e, neg_e)
 

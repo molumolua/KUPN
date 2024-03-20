@@ -215,11 +215,12 @@ if __name__ == '__main__':
         loss, s= 0, 0
         train_s_t = time()
         while s + args.batch_size <= len(train_cf):
-
             batch = get_feed_dict(train_cf_pairs,
                                   s, s + args.batch_size,
                                   user_dict['train_user_set'])
+
             batch_loss, _, _ = model(batch)
+
 
             batch_loss = batch_loss
             optimizer.zero_grad()
@@ -248,7 +249,7 @@ if __name__ == '__main__':
             s += args.batch_size_cl
 
         train_cl_e = time()
-        print("train cl time:",train_cl_e-train_cl_s)
+        # print("train cl time:",train_cl_e-train_cl_s)
         if epoch % 1 == 0 :
             """testing"""
             # model=model.eval()
