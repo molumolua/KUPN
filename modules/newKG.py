@@ -602,37 +602,38 @@ class Recommender(nn.Module):
         return loss
     
     def generate(self):
-        user_emb = self.all_embed[:self.n_users, :]
-        item_emb = self.all_embed[self.n_users:, :]
-        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.keep_rate)
-        # node_gcn_emb, node_prefer_emb =     self.gcn.generate(user_emb,
-        #                                              item_emb,
-        #                                              self.interact_mat,
-        #                                              self.edge_index,
-        #                                              self.edge_type,
-        #                                              extra_edge_index,
-        #                                              extra_edge_type)
-        node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
-                                                     item_emb,
-                                                     self.interact_mat,
-                                                     self.edge_index,
-                                                     self.edge_type,
-                                                     extra_edge_index,
-                                                     extra_edge_type,
-                                                     mess_dropout=False,
-                                                     node_dropout=False,
-                                                     drop_learn=True,
-                                                     method=self.method)
-        
-        user_prefer_emb=node_prefer_emb[:self.n_users]
-        entity_prefer_emb=node_prefer_emb[self.n_users:]
+        with torch.no_grad():
+            user_emb = self.all_embed[:self.n_users, :]
+            item_emb = self.all_embed[self.n_users:, :]
+            extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.keep_rate)
+            # node_gcn_emb, node_prefer_emb =     self.gcn.generate(user_emb,
+            #                                              item_emb,
+            #                                              self.interact_mat,
+            #                                              self.edge_index,
+            #                                              self.edge_type,
+            #                                              extra_edge_index,
+            #                                              extra_edge_type)
+            node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
+                                                        item_emb,
+                                                        self.interact_mat,
+                                                        self.edge_index,
+                                                        self.edge_type,
+                                                        extra_edge_index,
+                                                        extra_edge_type,
+                                                        mess_dropout=False,
+                                                        node_dropout=False,
+                                                        drop_learn=True,
+                                                        method=self.method)
+            
+            user_prefer_emb=node_prefer_emb[:self.n_users]
+            entity_prefer_emb=node_prefer_emb[self.n_users:]
 
-        user_gcn_emb=node_gcn_emb[:self.n_users]
-        entity_gcn_emb=node_gcn_emb[self.n_users:]
+            user_gcn_emb=node_gcn_emb[:self.n_users]
+            entity_gcn_emb=node_gcn_emb[self.n_users:]
 
 
-        user_res_emb=torch.concat([user_gcn_emb,user_prefer_emb],dim=1)
-        entity_res_emb=torch.concat([entity_gcn_emb,entity_prefer_emb],dim=1)
+            user_res_emb=torch.concat([user_gcn_emb,user_prefer_emb],dim=1)
+            entity_res_emb=torch.concat([entity_gcn_emb,entity_prefer_emb],dim=1)
 
         return entity_res_emb,user_res_emb
 

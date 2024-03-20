@@ -235,7 +235,7 @@ if __name__ == '__main__':
         s=0
         train_cl_s = time()
         cl_loss=0
-        while s+args.batch_size_cl <= n_nodes:
+        while s+args.batch_size_cl <= n_users+n_items:
             batch = generate_train_cl_batch(exist_nodes,args.batch_size_cl)
 
             batch_loss =model.get_cl_loss(batch)
@@ -248,7 +248,7 @@ if __name__ == '__main__':
             s += args.batch_size_cl
 
         train_cl_e = time()
-
+        print("train cl time:",train_cl_e-train_cl_s)
         if epoch % 1 == 0 :
             """testing"""
             # model=model.eval()
