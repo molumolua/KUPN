@@ -35,11 +35,12 @@ def parse_args():
 
     parser.add_argument("--keep_rate",type=float,default=1,help="keep rate for extra edges")
     parser.add_argument("--method",type=str,default="add",help="convolution method for user, add or stack")
+    parser.add_argument("--drop_learn",type=bool,default=False,help="use drop learn or not")
     # ===== relation context ===== #
     parser.add_argument('--context_hops', type=int, default=3, help='number of context hops')
 
     # ===== contrast and drop learner===== #
-    parser.add_argument("--tau_prefer",type=float,default=1.5)
+    parser.add_argument("--tau_prefer",type=float,default=0.7)
     parser.add_argument("--tau_kg",type=float,default=1.5)
     parser.add_argument("--tau_cl",type=float,default=0.7)
     parser.add_argument("--cl_alpha",type=float,default=0.1)

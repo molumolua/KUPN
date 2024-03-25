@@ -52,35 +52,38 @@ class Contrast_2view(nn.Module):
 
 
 class DropLearner(nn.Module):
-    def __init__(self, node_dim, mlp_edge_model_dim = 64):
+    def __init__(self, node_dim, n_relations,mlp_edge_model_dim = 64):
         super(DropLearner, self).__init__()
         
-        self.mlp_src = nn.Sequential(
-            nn.Linear(node_dim, mlp_edge_model_dim),
-            nn.ReLU(),
-            nn.Linear(mlp_edge_model_dim, 1)
-        )
-        self.mlp_dst = nn.Sequential(
-            nn.Linear(node_dim, mlp_edge_model_dim),
-            nn.ReLU(),
-            nn.Linear(mlp_edge_model_dim, 1)
-        )
-        self.mlp_edge = nn.Sequential(
-            nn.Linear(node_dim, mlp_edge_model_dim),
-            nn.ReLU(),
-            nn.Linear(mlp_edge_model_dim, 1)
-        )
+        # self.mlp_src = nn.Sequential(
+        #     nn.Linear(node_dim, mlp_edge_model_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(mlp_edge_model_dim, 1)
+        # )
+        # self.mlp_dst = nn.Sequential(
+        #     nn.Linear(node_dim, mlp_edge_model_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(mlp_edge_model_dim, 1)
+        # )
+        # self.mlp_edge = nn.Sequential(
+        #     nn.Linear(node_dim, mlp_edge_model_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(mlp_edge_model_dim, 1)
+        # )
 
         self.mlp_con = nn.Sequential(
-            nn.Linear(node_dim, mlp_edge_model_dim),
+            nn.Linear(3*node_dim, 3*mlp_edge_model_dim),
             nn.ReLU(),
-            nn.Linear(mlp_edge_model_dim, 1)
+            nn.Linear(3*mlp_edge_model_dim, 1)
         )
         
-        self.concat = True
+        # self.concat = True
         
 
         self.init_emb()
+        # self.n_relations=n_relations
+        # self.trans_M = nn.Parameter(torch.Tensor(self.n_relations, node_dim, node_dim))
+        # nn.init.xavier_uniform_(self.trans_M)
 
     def init_emb(self):
         for m in self.modules():
@@ -99,21 +102,27 @@ class DropLearner(nn.Module):
         head_emb=all_embed[edge_index[0,:]]
         tail_emb=all_embed[edge_index[1,:]]
         latent_emb=relation_emb[edge_type]
+        # W_r = self.trans_M[edge_type]
+
+        # r_mul_h = torch.bmm(head_emb.unsqueeze(1), W_r).squeeze(1)
+        # r_mul_t = torch.bmm(tail_emb.unsqueeze(1), W_r).squeeze(1)
 
         # print(head_emb.shape)
         # print(tail_emb.shape)
         # print(latent_emb.shape)
-        weight = self.mlp_con(head_emb + tail_emb + latent_emb)
-        w_src = self.mlp_src(head_emb)
-        w_dst = self.mlp_dst(tail_emb)
-        w_edge = self.mlp_edge(latent_emb)
-        weight += w_src + w_dst + w_edge
+        # weight = self.mlp_con(head_emb + tail_emb + latent_emb)
+
+        # w_src = self.mlp_src(head_emb)
+        # w_dst = self.mlp_dst(tail_emb)
+        # w_edge = self.mlp_edge(latent_emb)
+        # weight = w_src + w_dst + w_edge
+
+        weight = self.mlp_con(torch.concat([head_emb, tail_emb ,latent_emb],dim=1))
         weight = weight.squeeze()
 
 
-
         bias = 0.0 + 0.0001  # If bias is 0, we run into problems
-        eps = (bias - (1 - bias)) * torch.rand(weight.size()) + (1 - bias)
+        eps = (bias - (1 - bias)) * torch.rand(weight.size()) + (1 - bias)   # 1-rand()
         gate_inputs = torch.log(eps) - torch.log(1 - eps)
         gate_inputs = gate_inputs.to(head_emb.device)
         gate_inputs = (gate_inputs + weight) / temperature
@@ -139,11 +148,13 @@ class Aggregator(nn.Module):
     """
     Relational Path-aware Convolution Network
     """
-    def __init__(self, n_users,n_relations,n_nodes):
+    def __init__(self, n_users,n_relations,n_prefers,n_nodes):
         super(Aggregator, self).__init__()
         self.n_users = n_users
         self.n_nodes = n_nodes
         self.n_relations=n_relations
+        self.n_prefers=n_prefers
+
     
     def forward(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None):
         """aggregate"""
@@ -156,16 +167,16 @@ class Aggregator(nn.Module):
         res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
         return res_emb
     
-    def batch_generate(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,batch_size=1024):
-        """aggregate"""
+    def batch_get_contribute(self,all_emb,edge_index,edge_type,weight,mask,batch_size,aug_edge_weight,rate):
         dim = all_emb.shape[0]
         channel = all_emb.shape[1]
         head, tail = edge_index
-        # 初始化用于累积贡献总和和度数的张量
-        contrib_sum = torch.zeros(dim, channel).to(all_emb.device)
-        degrees = torch.zeros(dim).to(all_emb.device)
-
+        head=head[mask]
+        tail=tail[mask]
+        edge_type=edge_type[mask]
         n_batches = (edge_index.shape[1] + batch_size - 1) // batch_size
+        contrib_sum = torch.zeros(dim, channel).to(edge_index.device)
+        degrees = torch.zeros(dim).to(edge_index.device)
         for b in range(n_batches):
             start_idx = b * batch_size
             # print(start_idx,edge_index.shape[1])
@@ -177,18 +188,28 @@ class Aggregator(nn.Module):
 
             edge_relation_emb_batch = weight[edge_type_batch]
             neigh_relation_emb_batch = all_emb[tail_batch] * edge_relation_emb_batch
-
             if aug_edge_weight is not None:
                 aug_edge_weight_batch = aug_edge_weight[start_idx:end_idx]
                 neigh_relation_emb_batch *= aug_edge_weight_batch.unsqueeze(-1)
-
             # 累加当前批次的贡献
-            contrib_sum.index_add_(0, head_batch, neigh_relation_emb_batch)
+            contrib_sum.index_add_(0, head_batch, neigh_relation_emb_batch*rate)
             # 累加当前批次每个节点的出现次数
-            degrees.index_add_(0, head_batch, torch.ones_like(head_batch, dtype=torch.float))
+            degrees.index_add_(0, head_batch, torch.ones_like(head_batch, dtype=torch.float)*rate)
+        return degrees,contrib_sum
+        
 
-        # 计算平均贡献：将贡献总和除以度数
-        # 避免除以零，对度数为零的节点使用1进行替代
+
+    def batch_generate(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,batch_size=1024,zero_rate=1.0):
+        """aggregate"""
+        zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2)
+        zero_degrees,zero_contrib_sum=self.batch_get_contribute(all_emb,edge_index,edge_type,weight,zero_mask,batch_size,aug_edge_weight,zero_rate)
+
+        nonzero_mask=~ zero_mask
+        nonzero_degrees,nonzero_contrib_sum=self.batch_get_contribute(all_emb,edge_index,edge_type,weight,nonzero_mask,batch_size,aug_edge_weight,1.0)
+
+        degrees=nonzero_degrees+zero_degrees
+        contrib_sum=nonzero_contrib_sum+zero_contrib_sum
+
         degrees[degrees == 0] = 1
         res_emb = contrib_sum / degrees.unsqueeze(-1)
         return res_emb
@@ -264,12 +285,12 @@ class GraphConv(nn.Module):
         self.extra_weight = nn.Parameter(extra_weight)  # [n_relations - 1, in_channel]
 
         for i in range(n_hops):
-            self.convs.append(Aggregator(n_users=n_users,n_relations=n_relations,n_nodes=n_nodes))
+            self.convs.append(Aggregator(n_users=n_users,n_relations=n_relations,n_prefers=n_prefers,n_nodes=n_nodes))
 
         self.dropout = nn.Dropout(p=mess_dropout_rate)  # mess dropout
 
-        # self.drop_learner1 = DropLearner(channel)
-        # self.drop_learner2 = DropLearner(channel)
+        self.drop_learner1 = DropLearner(channel,n_relations)
+        self.drop_learner2 = DropLearner(channel,n_prefers)
 
     def _edge_sampling(self, edge_index, edge_type, rate=0.5):
         # edge_index: [2, -1]
@@ -317,12 +338,13 @@ class GraphConv(nn.Module):
             extra_edge_index, extra_edge_type = self._edge_sampling_torch(extra_edge_index, extra_edge_type, self.node_dropout_rate)
             interact_mat = self._sparse_dropout(interact_mat, self.node_dropout_rate)
         aug_edge_weight,aug_extra_edge_weight=None,None
+        node_emb  = torch.concat([user_emb,entity_emb],dim=0)     # [n_nodes, channel]
 
         # if drop_learn:
-        #     aug_edge_weight=self.drop_learner1(edge_index,edge_type-1,entity_emb,\
+        #     aug_edge_weight=self.drop_learner1(edge_index,edge_type-1,entity_emb,
         #                                             self.weight, temperature = self.tau_kg)
             
-        #     aug_extra_edge_weight = self.drop_learner2(extra_edge_index, extra_edge_type,torch.concat([user_emb,entity_emb],dim=0), \
+        #     aug_extra_edge_weight = self.drop_learner2(extra_edge_index, extra_edge_type,node_emb, 
         #                                                            self.extra_weight, temperature = self.tau_prefer)
         #     aug_edge_weight = aug_edge_weight.unsqueeze(-1)
         #     aug_extra_edge_weight=aug_extra_edge_weight.unsqueeze(-1)
@@ -330,7 +352,6 @@ class GraphConv(nn.Module):
 
         entity_res_emb = entity_emb                               # [n_entity, channel]
         
-        node_emb  = torch.concat([user_emb,entity_emb],dim=0)     # [n_nodes, channel]
         node_res_emb = node_emb
         if method == "add":
             user_res_emb = user_emb
@@ -382,26 +403,25 @@ class GraphConv(nn.Module):
         return gcn_res_emb,node_res_emb
     
     def batch_generate(self, user_emb, entity_emb,  interact_mat,edge_index, edge_type,
-               extra_edge_index,extra_edge_type):
+               extra_edge_index,extra_edge_type,method,keep_rate):
         
+        node_emb  = torch.concat([user_emb,entity_emb],dim=0)
         entity_res_emb = entity_emb                               # [n_entity, channel]
-        
-        node_emb  = torch.concat([user_emb,entity_emb],dim=0)     # [n_nodes, channel]
         node_res_emb = node_emb
-        user_res_emb = user_emb
+        if method == "add":
+            user_res_emb = user_emb
+        elif method =="stack":
+            user_res_emb = [user_emb]
+        else:
+            raise NotImplementedError
 
         # user_res_emb = [user_emb]
         with torch.no_grad():
             for i in range(len(self.convs)):
                 #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
-                entity_emb = self.convs[i].batch_generate(entity_emb,edge_index,edge_type-1,self.weight)
-                node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight)
-                # entity_emb, node_emb = self.convs[i](entity_emb, node_emb[:self.n_users], 
-                #                                      edge_index, edge_type,extra_edge_index, extra_edge_type,
-                #                                      self.weight,self.extra_weight,
-                #                                      aug_edge_weight,aug_extra_edge_weight)
+                entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight)
+                node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight,zero_rate=1.0/keep_rate)
                 
-
                 user_emb =torch.sparse.mm(interact_mat,entity_emb)
 
                 entity_emb = F.normalize(entity_emb)
@@ -413,16 +433,18 @@ class GraphConv(nn.Module):
                 """result emb"""
                 entity_res_emb = torch.add(entity_res_emb, entity_emb)
                 node_res_emb = torch.add(node_res_emb, node_emb)
+                if method == "add":
+                    user_res_emb = torch.add(user_res_emb, user_emb)
+                elif method =="stack":
+                    user_res_emb +=[user_emb]
+                else:
+                    raise NotImplementedError
+            if method == "stack":
+                user_res_emb =torch.stack(user_res_emb,dim=1)
+                user_res_emb =torch.mean(user_res_emb,dim=1)
 
-                # user_res_emb +=[user_emb]  #old
+            gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
 
-                user_res_emb = torch.add(user_res_emb, user_emb)  #new
-
-        # user_res_emb =torch.stack(user_res_emb,dim=1)
-        # user_res_emb =torch.mean(user_res_emb,dim=1)
-
-
-        gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
         return gcn_res_emb,node_res_emb
 
 
@@ -450,6 +472,8 @@ class Recommender(nn.Module):
         self.mess_dropout = args_config.mess_dropout
         self.mess_dropout_rate = args_config.mess_dropout_rate
 
+        self.drop_learn=args_config.drop_learn
+
 
         self.tau_prefer=args_config.tau_prefer
         self.tau_kg=args_config.tau_kg
@@ -471,6 +495,7 @@ class Recommender(nn.Module):
         # self.extra_graph = extra_graph
         self.extra_edge_indexs = self._get_extra_edges(extra_graphs)
 
+        self._init_weight(adj_mat)
         self._init_weight(adj_mat)
         self.all_embed = nn.Parameter(self.all_embed)
         # self.latent_emb = nn.Parameter(self.latent_emb)
@@ -567,7 +592,7 @@ class Recommender(nn.Module):
                                                      extra_edge_type,
                                                      mess_dropout=self.mess_dropout,
                                                      node_dropout=self.node_dropout,
-                                                     drop_learn=True,
+                                                     drop_learn=self.drop_learn,
                                                      method=self.method)
 
         
@@ -598,7 +623,7 @@ class Recommender(nn.Module):
                                                      extra_edge_type,
                                                      mess_dropout=self.mess_dropout,
                                                      node_dropout=self.node_dropout,
-                                                     drop_learn=True,
+                                                     drop_learn=self.drop_learn,
                                                      method=self.method)
         # user_prefer_emb=node_prefer_emb[:self.n_users]
         # entity_prefer_emb=node_prefer_emb[self.n_users:]
@@ -614,24 +639,26 @@ class Recommender(nn.Module):
             user_emb = self.all_embed[:self.n_users, :]
             item_emb = self.all_embed[self.n_users:, :]
             extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.keep_rate)
-            # node_gcn_emb, node_prefer_emb =     self.gcn.generate(user_emb,
-            #                                              item_emb,
-            #                                              self.interact_mat,
-            #                                              self.edge_index,
-            #                                              self.edge_type,
-            #                                              extra_edge_index,
-            #                                              extra_edge_type)
-            node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
-                                                        item_emb,
-                                                        self.interact_mat,
-                                                        self.edge_index,
-                                                        self.edge_type,
-                                                        extra_edge_index,
-                                                        extra_edge_type,
-                                                        mess_dropout=False,
-                                                        node_dropout=False,
-                                                        drop_learn=True,
-                                                        method=self.method)
+            node_gcn_emb, node_prefer_emb =     self.gcn.batch_generate(user_emb,
+                                                         item_emb,
+                                                         self.interact_mat,
+                                                         self.edge_index,
+                                                         self.edge_type,
+                                                         extra_edge_index,
+                                                         extra_edge_type,
+                                                         self.method,
+                                                         self.keep_rate)
+            # node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
+            #                                             item_emb,
+            #                                             self.interact_mat,
+            #                                             self.edge_index,
+            #                                             self.edge_type,
+            #                                             extra_edge_index,
+            #                                             extra_edge_type,
+            #                                             mess_dropout=False,
+            #                                             node_dropout=False,
+            #                                             drop_learn=self.drop_learn,
+            #                                             method=self.method)
             
             user_prefer_emb=node_prefer_emb[:self.n_users]
             entity_prefer_emb=node_prefer_emb[self.n_users:]

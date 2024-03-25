@@ -158,16 +158,22 @@ if __name__ == '__main__':
     exist_nodes=[i for i in range(n_items+n_users)] #cl部分
     n_params['n_prefers']=len(user_entity_mat_list)
 
+    """cf data"""
+    train_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in train_cf], np.int32))
+    test_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in test_cf], np.int32))
+
+
+    """show information"""
     print("n_user:",n_users)
     print("n_items:",n_items)
     print("n_entities:",n_entities)
     print("n_relations:",n_relations)
     print("n_nodes:",n_nodes)
     print("n_prefers:",n_params['n_prefers'])
-    """cf data"""
-    train_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in train_cf], np.int32))
-    test_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in test_cf], np.int32))
-
+    print("tau_cl:",args.tau_cl)
+    print("tau_kg:",args.tau_kg)
+    print("tau_prefer:",args.tau_prefer)
+    print("drop_learn:",args.drop_learn)
 
     """define model"""
     model = Recommender(n_params, args, graph, mean_mat_list[0],prefer_graphs).to(device)
