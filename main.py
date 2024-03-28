@@ -274,7 +274,7 @@ if __name__ == '__main__':
             # early stopping when cur_best_pre_0 is decreasing for ten successive steps.
             cur_best_pre_0, stopping_step, should_stop = early_stopping(ret['recall'][0], cur_best_pre_0,
                                                                         stopping_step, expected_order='acc',
-                                                                        flag_step=20)
+                                                                        flag_step=30)
             if should_stop:
                 break
 

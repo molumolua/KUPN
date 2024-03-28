@@ -4,7 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from time import time
-from utils.scatter import scatter_mean
+from utils.scatter import scatter_mean,scatter_sum
+from torch_geometric.utils import softmax as scatter_softmax
+import math
+
 class Contrast_2view(nn.Module):
     def __init__(self, cf_dim, kg_dim, hidden_dim, tau, cl_size):
         super(Contrast_2view, self).__init__()
@@ -148,23 +151,32 @@ class Aggregator(nn.Module):
     """
     Relational Path-aware Convolution Network
     """
-    def __init__(self, n_users,n_relations,n_prefers,n_nodes):
+    def __init__(self, n_users,n_relations,n_prefers,n_nodes,channel):
         super(Aggregator, self).__init__()
         self.n_users = n_users
         self.n_nodes = n_nodes
         self.n_relations=n_relations
         self.n_prefers=n_prefers
 
+        self.n_heads=2
+        self.d_k=channel//self.n_heads
+
+
     
-    def forward(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None):
+    def forward(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,div=False):
         """aggregate"""
         dim=all_emb.shape[0]
         head, tail = edge_index
         edge_relation_emb = weight[edge_type]
         neigh_relation_emb = all_emb[tail] * edge_relation_emb  # [-1, channel]
         if aug_edge_weight is not None:
-            neigh_relation_emb = neigh_relation_emb*aug_edge_weight
-        res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
+            neigh_relation_emb = neigh_relation_emb.view(-1, self.n_heads, self.d_k)*aug_edge_weight.view(-1, self.n_heads, 1)
+            neigh_relation_emb = neigh_relation_emb.view(-1,self.n_heads*self.d_k)
+            # neigh_relation_emb *=aug_edge_weight
+        if div:
+            res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
+        else:
+            res_emb = scatter_sum(src=neigh_relation_emb, index=head,dim_size=dim,dim=0)
         return res_emb
     
     def batch_get_contribute(self,all_emb,edge_index,edge_type,weight,mask,batch_size,aug_edge_weight,rate):
@@ -174,6 +186,7 @@ class Aggregator(nn.Module):
         head=head[mask]
         tail=tail[mask]
         edge_type=edge_type[mask]
+        aug_edge_weight=aug_edge_weight[mask]
         n_batches = (edge_index.shape[1] + batch_size - 1) // batch_size
         contrib_sum = torch.zeros(dim, channel).to(edge_index.device)
         degrees = torch.zeros(dim).to(edge_index.device)
@@ -190,7 +203,9 @@ class Aggregator(nn.Module):
             neigh_relation_emb_batch = all_emb[tail_batch] * edge_relation_emb_batch
             if aug_edge_weight is not None:
                 aug_edge_weight_batch = aug_edge_weight[start_idx:end_idx]
-                neigh_relation_emb_batch *= aug_edge_weight_batch.unsqueeze(-1)
+                # neigh_relation_emb_batch *= aug_edge_weight_batch.unsqueeze(-1)
+                neigh_relation_emb_batch = neigh_relation_emb_batch.view(-1, self.n_heads, self.d_k)*aug_edge_weight_batch.view(-1, self.n_heads, 1)
+                neigh_relation_emb_batch = neigh_relation_emb_batch.view(-1,self.n_heads*self.d_k)
             # 累加当前批次的贡献
             contrib_sum.index_add_(0, head_batch, neigh_relation_emb_batch*rate)
             # 累加当前批次每个节点的出现次数
@@ -199,7 +214,7 @@ class Aggregator(nn.Module):
         
 
 
-    def batch_generate(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,batch_size=1024,zero_rate=1.0):
+    def batch_generate(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,batch_size=1024,zero_rate=1.0,div=False):
         """aggregate"""
         zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2)
         zero_degrees,zero_contrib_sum=self.batch_get_contribute(all_emb,edge_index,edge_type,weight,zero_mask,batch_size,aug_edge_weight,zero_rate)
@@ -209,10 +224,15 @@ class Aggregator(nn.Module):
 
         degrees=nonzero_degrees+zero_degrees
         contrib_sum=nonzero_contrib_sum+zero_contrib_sum
-
-        degrees[degrees == 0] = 1
-        res_emb = contrib_sum / degrees.unsqueeze(-1)
+        if div:
+            degrees[degrees == 0] = 1
+            res_emb = contrib_sum / degrees.unsqueeze(-1)
+        else:
+            res_emb = contrib_sum
         return res_emb
+
+    
+
     
 
     # def forward(self, entity_emb, user_emb,  #n种隐关系向量  [n_relations,latend_dim]
@@ -285,12 +305,19 @@ class GraphConv(nn.Module):
         self.extra_weight = nn.Parameter(extra_weight)  # [n_relations - 1, in_channel]
 
         for i in range(n_hops):
-            self.convs.append(Aggregator(n_users=n_users,n_relations=n_relations,n_prefers=n_prefers,n_nodes=n_nodes))
+            self.convs.append(Aggregator(n_users=n_users,n_relations=n_relations,n_prefers=n_prefers,n_nodes=n_nodes,channel=channel))
 
         self.dropout = nn.Dropout(p=mess_dropout_rate)  # mess dropout
 
-        self.drop_learner1 = DropLearner(channel,n_relations)
-        self.drop_learner2 = DropLearner(channel,n_prefers)
+        # self.drop_learner1 = DropLearner(channel,n_relations)
+        # self.drop_learner2 = DropLearner(channel,n_prefers)
+
+        self.W_Q = nn.Parameter(torch.Tensor(channel, channel))
+
+        self.n_heads = 2
+        self.d_k = channel // self.n_heads
+
+        nn.init.xavier_uniform_(self.W_Q)
 
     def _edge_sampling(self, edge_index, edge_type, rate=0.5):
         # edge_index: [2, -1]
@@ -350,6 +377,8 @@ class GraphConv(nn.Module):
         #     aug_extra_edge_weight=aug_extra_edge_weight.unsqueeze(-1)
         
 
+        aug_extra_edge_weight=self.calc_attn_score(node_emb,extra_edge_index,extra_edge_type).unsqueeze(-1)
+
         entity_res_emb = entity_emb                               # [n_entity, channel]
         
         node_res_emb = node_emb
@@ -363,8 +392,8 @@ class GraphConv(nn.Module):
 
         for i in range(len(self.convs)):
             #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
-            entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight,aug_edge_weight)
-            node_emb = self.convs[i](node_emb,extra_edge_index,extra_edge_type,self.extra_weight,aug_extra_edge_weight)
+            entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight,aug_edge_weight,div=True)
+            node_emb = self.convs[i](node_emb,extra_edge_index,extra_edge_type,self.extra_weight,aug_extra_edge_weight,div=False)
             # entity_emb, node_emb = self.convs[i](entity_emb, node_emb[:self.n_users], 
             #                                      edge_index, edge_type,extra_edge_index, extra_edge_type,
             #                                      self.weight,self.extra_weight,
@@ -417,10 +446,14 @@ class GraphConv(nn.Module):
 
         # user_res_emb = [user_emb]
         with torch.no_grad():
+            aug_extra_edge_weight=self.batch_calc_attn_score(node_emb,extra_edge_index,extra_edge_type)
             for i in range(len(self.convs)):
                 #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
-                entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight)
-                node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight,zero_rate=1.0/keep_rate)
+                entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight,div=True)
+                node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight,
+                                                        aug_edge_weight=aug_extra_edge_weight,
+                                                        zero_rate=1.0/keep_rate,
+                                                        div=False)
                 
                 user_emb =torch.sparse.mm(interact_mat,entity_emb)
 
@@ -446,6 +479,59 @@ class GraphConv(nn.Module):
             gcn_res_emb=torch.concat([user_res_emb,entity_res_emb],dim=0) 
 
         return gcn_res_emb,node_res_emb
+
+    def calc_attn_score(self,all_emb,edge_index,edge_type):
+        n_nodes = all_emb.shape[0]
+        head, tail = edge_index
+
+        query = (all_emb[head] @ self.W_Q).view(-1, self.n_heads, self.d_k)
+        key = (all_emb[tail] @ self.W_Q).view(-1, self.n_heads, self.d_k)
+        key = key * self.extra_weight[edge_type].view(-1, self.n_heads, self.d_k)
+
+        edge_attn = (query * key).sum(dim=-1) / math.sqrt(self.d_k)
+        # softmax by head_node
+        edge_attn_score = scatter_softmax(edge_attn, head)
+        # # normalization by head_node degree
+        # norm = scatter_sum(torch.ones_like(head), head, dim=0, dim_size=n_nodes)
+        # norm = torch.index_select(norm, 0, head)
+        # edge_attn_score = edge_attn_score * norm
+        
+        return edge_attn_score
+
+    @torch.no_grad()
+    def batch_calc_attn_score(self,all_emb,edge_index,edge_type,batch_size=1024):
+        n_nodes = all_emb.shape[0]
+        head, tail = edge_index
+
+        n_batches = (edge_index.shape[1] + batch_size - 1) // batch_size
+        edge_attns=[]
+        for b in range(n_batches):
+            start_idx = b * batch_size
+            # print(start_idx,edge_index.shape[1])
+            end_idx = min((b + 1) * batch_size, edge_index.shape[1])
+
+            head_batch = head[start_idx:end_idx]
+            tail_batch = tail[start_idx:end_idx]
+            edge_type_batch = edge_type[start_idx:end_idx]
+
+            query_batch = (all_emb[head_batch] @ self.W_Q).view(-1, self.n_heads, self.d_k)
+            key_batch = (all_emb[tail_batch] @ self.W_Q).view(-1, self.n_heads, self.d_k)
+            key_batch = key_batch * self.extra_weight[edge_type_batch].view(-1, self.n_heads, self.d_k)
+            edge_attn_batch = (query_batch * key_batch).sum(dim=-1) / math.sqrt(self.d_k)
+            edge_attns.append(edge_attn_batch)
+
+        edge_attn =torch.concat(edge_attns,dim=0)
+        # softmax by head_node
+        edge_attn_score = scatter_softmax(edge_attn, head)
+        # # normalization by head_node degree
+        # norm = scatter_sum(torch.ones_like(head), head, dim=0, dim_size=n_nodes)
+        # norm = torch.index_select(norm, 0, head)
+        # edge_attn_score = edge_attn_score * norm
+
+        # print(edge_attn_score.shape)
+        return edge_attn_score
+    
+    
 
 
 
