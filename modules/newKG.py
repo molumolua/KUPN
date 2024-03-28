@@ -538,13 +538,19 @@ class GraphConv(nn.Module):
         n_nodes = all_emb.shape[0]
         head, tail = edge_index
 
-        h_r = all_emb[head] * self.extra_weight[edge_type]
-        h_r = h_r @ self.W_Q
-        t_r = all_emb[tail] * self.extra_weight[edge_type]
-        t_r = t_r @ self.W_K
+        # h_r = all_emb[head] * self.extra_weight[edge_type]
+        # h_r = h_r @ self.W_Q
+        # t_r = all_emb[tail] * self.extra_weight[edge_type]
+        # t_r = t_r @ self.W_K
 
-        h_r = h_r/torch.norm(h_r,dim=1,keepdim=True)
-        t_r = t_r/torch.norm(t_r,dim=1,keepdim=True)
+        h_r = all_emb[head] @ self.W_Q
+        h_r = h_r * self.extra_weight[edge_type]
+        t_r = all_emb[tail]  @ self.W_K
+        t_r = t_r * self.extra_weight[edge_type]
+
+
+        # h_r = h_r/torch.norm(h_r,dim=1,keepdim=True)
+        # t_r = t_r/torch.norm(t_r,dim=1,keepdim=True)
 
         edge_attn = (h_r * t_r).sum(dim=-1)
 
@@ -569,13 +575,18 @@ class GraphConv(nn.Module):
             tail_batch = tail[start_idx:end_idx]
             edge_type_batch = edge_type[start_idx:end_idx]
 
-            h_r_batch = all_emb[head_batch] * self.extra_weight[edge_type_batch]
-            h_r_batch = h_r_batch @ self.W_Q
-            t_r_batch = all_emb[tail_batch] * self.extra_weight[edge_type_batch]
-            t_r_batch = t_r_batch @ self.W_K
+            # h_r_batch = all_emb[head_batch] * self.extra_weight[edge_type_batch]
+            # h_r_batch = h_r_batch @ self.W_Q
+            # t_r_batch = all_emb[tail_batch] * self.extra_weight[edge_type_batch]
+            # t_r_batch = t_r_batch @ self.W_K
 
-            h_r_batch = h_r_batch/torch.norm(h_r_batch,dim=1,keepdim=True)
-            t_r_batch = t_r_batch/torch.norm(t_r_batch,dim=1,keepdim=True)
+            h_r_batch = all_emb[head_batch] @ self.W_Q
+            h_r_batch = h_r_batch * self.extra_weight[edge_type_batch]
+            t_r_batch = all_emb[tail_batch] @ self.W_K
+            t_r_batch = t_r_batch * self.extra_weight[edge_type_batch]
+
+            # h_r_batch = h_r_batch/torch.norm(h_r_batch,dim=1,keepdim=True)
+            # t_r_batch = t_r_batch/torch.norm(t_r_batch,dim=1,keepdim=True)
 
             edge_attn = (h_r_batch * t_r_batch).sum(dim=-1)
             edge_attns.append(edge_attn)
