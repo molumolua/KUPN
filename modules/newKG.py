@@ -170,9 +170,9 @@ class Aggregator(nn.Module):
         edge_relation_emb = weight[edge_type]
         neigh_relation_emb = all_emb[tail] * edge_relation_emb  # [-1, channel]
         if aug_edge_weight is not None:
-            neigh_relation_emb = neigh_relation_emb.view(-1, self.n_heads, self.d_k)*aug_edge_weight.view(-1, self.n_heads, 1)
-            neigh_relation_emb = neigh_relation_emb.view(-1,self.n_heads*self.d_k)
-            # neigh_relation_emb *=aug_edge_weight
+            # neigh_relation_emb = neigh_relation_emb.view(-1, self.n_heads, self.d_k)*aug_edge_weight.view(-1, self.n_heads, 1)
+            # neigh_relation_emb = neigh_relation_emb.view(-1,self.n_heads*self.d_k)
+            neigh_relation_emb *=aug_edge_weight
         if div:
             res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
         else:
@@ -203,9 +203,9 @@ class Aggregator(nn.Module):
             neigh_relation_emb_batch = all_emb[tail_batch] * edge_relation_emb_batch
             if aug_edge_weight is not None:
                 aug_edge_weight_batch = aug_edge_weight[start_idx:end_idx]
-                # neigh_relation_emb_batch *= aug_edge_weight_batch.unsqueeze(-1)
-                neigh_relation_emb_batch = neigh_relation_emb_batch.view(-1, self.n_heads, self.d_k)*aug_edge_weight_batch.view(-1, self.n_heads, 1)
-                neigh_relation_emb_batch = neigh_relation_emb_batch.view(-1,self.n_heads*self.d_k)
+                neigh_relation_emb_batch *= aug_edge_weight_batch.unsqueeze(-1)
+                # neigh_relation_emb_batch = neigh_relation_emb_batch.view(-1, self.n_heads, self.d_k)*aug_edge_weight_batch.view(-1, self.n_heads, 1)
+                # neigh_relation_emb_batch = neigh_relation_emb_batch.view(-1,self.n_heads*self.d_k)
             # 累加当前批次的贡献
             contrib_sum.index_add_(0, head_batch, neigh_relation_emb_batch*rate)
             # 累加当前批次每个节点的出现次数
@@ -314,6 +314,8 @@ class GraphConv(nn.Module):
 
         self.W_Q = nn.Parameter(torch.Tensor(channel, channel))
 
+        self.W_K = nn.Parameter(torch.Tensor(channel, channel))
+
         self.n_heads = 2
         self.d_k = channel // self.n_heads
 
@@ -393,7 +395,7 @@ class GraphConv(nn.Module):
         for i in range(len(self.convs)):
             #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
             entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight,aug_edge_weight,div=True)
-            node_emb = self.convs[i](node_emb,extra_edge_index,extra_edge_type,self.extra_weight,aug_extra_edge_weight,div=False)
+            node_emb = self.convs[i](node_emb,extra_edge_index,extra_edge_type,self.extra_weight,aug_extra_edge_weight,div=True)
             # entity_emb, node_emb = self.convs[i](entity_emb, node_emb[:self.n_users], 
             #                                      edge_index, edge_type,extra_edge_index, extra_edge_type,
             #                                      self.weight,self.extra_weight,
@@ -453,7 +455,7 @@ class GraphConv(nn.Module):
                 node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight,
                                                         aug_edge_weight=aug_extra_edge_weight,
                                                         zero_rate=1.0/keep_rate,
-                                                        div=False)
+                                                        div=True)
                 
                 user_emb =torch.sparse.mm(interact_mat,entity_emb)
 
@@ -480,21 +482,74 @@ class GraphConv(nn.Module):
 
         return gcn_res_emb,node_res_emb
 
+
+    # def calc_attn_score(self,all_emb,edge_index,edge_type):
+    #     n_nodes = all_emb.shape[0]
+    #     head, tail = edge_index
+
+    #     query = (all_emb[head] @ self.W_Q).view(-1, self.n_heads, self.d_k)
+    #     key = (all_emb[tail] @ self.W_Q).view(-1, self.n_heads, self.d_k)
+    #     key = key * self.extra_weight[edge_type].view(-1, self.n_heads, self.d_k)
+
+    #     edge_attn = (query * key).sum(dim=-1) / math.sqrt(self.d_k)
+    #     # softmax by head_node
+    #     edge_attn_score = scatter_softmax(edge_attn, head)
+    #     # # normalization by head_node degree
+    #     # norm = scatter_sum(torch.ones_like(head), head, dim=0, dim_size=n_nodes)
+    #     # norm = torch.index_select(norm, 0, head)
+    #     # edge_attn_score = edge_attn_score * norm
+        
+    #     return edge_attn_score
+
+    # @torch.no_grad()
+    # def batch_calc_attn_score(self,all_emb,edge_index,edge_type,batch_size=1024):
+    #     n_nodes = all_emb.shape[0]
+    #     head, tail = edge_index
+
+    #     n_batches = (edge_index.shape[1] + batch_size - 1) // batch_size
+    #     edge_attns=[]
+    #     for b in range(n_batches):
+    #         start_idx = b * batch_size
+    #         # print(start_idx,edge_index.shape[1])
+    #         end_idx = min((b + 1) * batch_size, edge_index.shape[1])
+
+    #         head_batch = head[start_idx:end_idx]
+    #         tail_batch = tail[start_idx:end_idx]
+    #         edge_type_batch = edge_type[start_idx:end_idx]
+
+    #         query_batch = (all_emb[head_batch] @ self.W_Q).view(-1, self.n_heads, self.d_k)
+    #         key_batch = (all_emb[tail_batch] @ self.W_Q).view(-1, self.n_heads, self.d_k)
+    #         key_batch = key_batch * self.extra_weight[edge_type_batch].view(-1, self.n_heads, self.d_k)
+    #         edge_attn_batch = (query_batch * key_batch).sum(dim=-1) / math.sqrt(self.d_k)
+    #         edge_attns.append(edge_attn_batch)
+
+    #     edge_attn =torch.concat(edge_attns,dim=0)
+    #     # softmax by head_node
+    #     edge_attn_score = scatter_softmax(edge_attn, head)
+    #     # # normalization by head_node degree
+    #     # norm = scatter_sum(torch.ones_like(head), head, dim=0, dim_size=n_nodes)
+    #     # norm = torch.index_select(norm, 0, head)
+    #     # edge_attn_score = edge_attn_score * norm
+
+    #     # print(edge_attn_score.shape)
+    #     return edge_attn_score
+
     def calc_attn_score(self,all_emb,edge_index,edge_type):
         n_nodes = all_emb.shape[0]
         head, tail = edge_index
 
-        query = (all_emb[head] @ self.W_Q).view(-1, self.n_heads, self.d_k)
-        key = (all_emb[tail] @ self.W_Q).view(-1, self.n_heads, self.d_k)
-        key = key * self.extra_weight[edge_type].view(-1, self.n_heads, self.d_k)
+        h_r = all_emb[head] * self.extra_weight[edge_type]
+        h_r = h_r @ self.W_Q
+        t_r = all_emb[tail] * self.extra_weight[edge_type]
+        t_r = t_r @ self.W_K
 
-        edge_attn = (query * key).sum(dim=-1) / math.sqrt(self.d_k)
+        h_r = h_r/torch.norm(h_r,dim=1,keepdim=True)
+        t_r = t_r/torch.norm(t_r,dim=1,keepdim=True)
+
+        edge_attn = (h_r * t_r).sum(dim=-1)
+
         # softmax by head_node
         edge_attn_score = scatter_softmax(edge_attn, head)
-        # # normalization by head_node degree
-        # norm = scatter_sum(torch.ones_like(head), head, dim=0, dim_size=n_nodes)
-        # norm = torch.index_select(norm, 0, head)
-        # edge_attn_score = edge_attn_score * norm
         
         return edge_attn_score
 
@@ -514,11 +569,16 @@ class GraphConv(nn.Module):
             tail_batch = tail[start_idx:end_idx]
             edge_type_batch = edge_type[start_idx:end_idx]
 
-            query_batch = (all_emb[head_batch] @ self.W_Q).view(-1, self.n_heads, self.d_k)
-            key_batch = (all_emb[tail_batch] @ self.W_Q).view(-1, self.n_heads, self.d_k)
-            key_batch = key_batch * self.extra_weight[edge_type_batch].view(-1, self.n_heads, self.d_k)
-            edge_attn_batch = (query_batch * key_batch).sum(dim=-1) / math.sqrt(self.d_k)
-            edge_attns.append(edge_attn_batch)
+            h_r_batch = all_emb[head_batch] * self.extra_weight[edge_type_batch]
+            h_r_batch = h_r_batch @ self.W_Q
+            t_r_batch = all_emb[tail_batch] * self.extra_weight[edge_type_batch]
+            t_r_batch = t_r_batch @ self.W_K
+
+            h_r_batch = h_r_batch/torch.norm(h_r_batch,dim=1,keepdim=True)
+            t_r_batch = t_r_batch/torch.norm(t_r_batch,dim=1,keepdim=True)
+
+            edge_attn = (h_r_batch * t_r_batch).sum(dim=-1)
+            edge_attns.append(edge_attn)
 
         edge_attn =torch.concat(edge_attns,dim=0)
         # softmax by head_node
