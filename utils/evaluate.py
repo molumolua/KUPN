@@ -103,7 +103,7 @@ def test_one_user(x):
     return get_performance(user_pos_test, r, auc, Ks)
 
 
-def test(model, user_dict, n_params):
+def test(model, user_dict, n_params,index_3rd=None,type_3rd=None):
     result = {'precision': np.zeros(len(Ks)),
               'recall': np.zeros(len(Ks)),
               'ndcg': np.zeros(len(Ks)),
@@ -129,7 +129,7 @@ def test(model, user_dict, n_params):
 
     count = 0
 
-    entity_gcn_emb, user_gcn_emb = model.generate()
+    entity_gcn_emb, user_gcn_emb = model.generate(index_3rd,type_3rd)
 
     for u_batch_id in range(n_user_batchs):
         start = u_batch_id * u_batch_size

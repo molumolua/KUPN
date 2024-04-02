@@ -5,7 +5,7 @@ import numpy as np
 import scipy.sparse as sp
 from tqdm import tqdm
 import networkx as nx
-
+import collections
 import random
 from time import time
 from collections import defaultdict
@@ -68,6 +68,7 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
     # print("min inter_adj_col:",min(inter_adj.col))
     inter_adj = inter_adj.tocsr()
     return_adj_mat_list = []
+    Flag=[ False for i in range(len(adj_mat_list))]
     for r_id,adj in enumerate(adj_mat_list):
         now_adj=None
         if(r_id==0):
@@ -79,7 +80,6 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
             now_adj=now_adj.tocoo()
             # now_adj.col+=n_users  #remap entities
 
-        # now_adj=sp.coo_matrix((now_adj.data, (now_adj.row, now_adj.col+n_users)), shape=now_adj.shape)
         now_adj.col+=n_users  # remap entities
         count=now_adj.data.size
         tot+=count
@@ -100,9 +100,9 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
         # now_adj.data = np.ones_like(now_adj.data)
         if(count==0):
             continue
-
         assert max(now_adj.col) <n_nodes
         assert min(now_adj.col) >=n_users
+        Flag[r_id]=True
         return_adj_mat_list.append(now_adj)
     print("total prefer relations:",tot)
     new_coo_matrices = []
@@ -112,17 +112,32 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
         new_coo_matrices.append(new_matrix)
     return_adj_mat_list +=new_coo_matrices
 
-    return return_adj_mat_list
+    used_relations=[i for i in range(len(adj_mat_list)) if Flag[i]==True ]
+    inverse_relations=[i+n_relations for i in used_relations]
+    left_relations=[i for i in range(len(adj_mat_list)) if Flag[i]==False ]
 
-def build_prefer_graph(adj_mat_list):
+    return return_adj_mat_list,left_relations,used_relations+inverse_relations
+
+def build_prefer_graph(adj_mat_list,prefers):
     prefer_graphs=[]
     for r_id,adj in enumerate(adj_mat_list):
         prefer_graph = nx.MultiDiGraph()
         for h_id, t_id, v in zip(adj.row, adj.col, adj.data):
-            prefer_graph.add_edge(h_id, t_id, key=r_id)
+            prefer_graph.add_edge(h_id, t_id, key=prefers[r_id])
         prefer_graphs.append(prefer_graph)
 
     return prefer_graphs
+
+
+def build_head_dict(adj_mat_list,left_relations,n_users,n_items):
+    head_dict=collections.defaultdict(list)
+    for r_id in left_relations:
+        adj=adj_mat_list[r_id]
+        for h_id, t_id, v in zip(adj.row, adj.col, adj.data):
+            # if t_id>=n_items:
+            #     head_dict[h_id+n_users].append((t_id,r_id))
+            head_dict[h_id+n_users].append((t_id,r_id))
+    return head_dict
 
 
 
@@ -153,10 +168,13 @@ if __name__ == '__main__':
     n_nodes = n_params['n_nodes']
 
     """get user --item -- entity"""
-    user_entity_mat_list=find_user_entity_neigh(adj_mat_list,n_users,n_nodes)
-    prefer_graphs=build_prefer_graph(user_entity_mat_list)
+    user_entity_mat_list,left_relations,init_prefers=find_user_entity_neigh(adj_mat_list,n_users,n_nodes)
+    prefer_graphs=build_prefer_graph(user_entity_mat_list,init_prefers)
+    head_dict=build_head_dict(adj_mat_list,left_relations,n_users,n_items)
+
     exist_nodes=[i for i in range(n_items+n_users)] #cl部分
-    n_params['n_prefers']=len(user_entity_mat_list)
+    n_params['n_prefers']=2*n_relations
+
 
     """cf data"""
     train_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in train_cf], np.int32))
@@ -190,7 +208,8 @@ if __name__ == '__main__':
     cur_best_pre_0 = 0
     stopping_step = 0
     should_stop = False
-
+    index_3rd=None
+    type_3rd=None
     print("start training ...")
     for epoch in range(args.epoch):
         # if hasattr(torch.cuda, 'empty_cache'):
@@ -210,7 +229,6 @@ if __name__ == '__main__':
         # print(train_res)
 
 
-
         """training CF"""
         # shuffle training data
         index = np.arange(len(train_cf))
@@ -220,12 +238,14 @@ if __name__ == '__main__':
         """training cf"""
         loss, s= 0, 0
         train_s_t = time()
+        index_3rd,type_3rd=model.find_three_level_neigh(2,1,head_dict,batch_size=1024)
+        print("get 3rd neigh time:",time()-train_s_t)
         while s + args.batch_size <= len(train_cf):
             batch = get_feed_dict(train_cf_pairs,
                                   s, s + args.batch_size,
                                   user_dict['train_user_set'])
 
-            batch_loss, _, _ = model(batch)
+            batch_loss, _, _ = model(batch,index_3rd,type_3rd)
 
 
             batch_loss = batch_loss
@@ -245,7 +265,7 @@ if __name__ == '__main__':
         while s+args.batch_size_cl <= n_users+n_items:
             batch = generate_train_cl_batch(exist_nodes,args.batch_size_cl)
 
-            batch_loss =model.get_cl_loss(batch)
+            batch_loss =model.get_cl_loss(batch,index_3rd,type_3rd)
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -260,7 +280,7 @@ if __name__ == '__main__':
             """testing"""
             # model=model.eval()
             test_s_t = time()
-            ret = test(model, user_dict, n_params)
+            ret = test(model, user_dict, n_params,index_3rd,type_3rd)
             test_e_t = time()
 
             train_res = PrettyTable()
