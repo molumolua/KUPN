@@ -129,14 +129,15 @@ def build_prefer_graph(adj_mat_list,prefers):
     return prefer_graphs
 
 
-def build_head_dict(adj_mat_list,left_relations,n_users,n_items):
+def build_head_dict(adj_mat_list,left_relations,n_users,n_etities):
     head_dict=collections.defaultdict(list)
     for r_id in left_relations:
         adj=adj_mat_list[r_id]
         for h_id, t_id, v in zip(adj.row, adj.col, adj.data):
             # if t_id>=n_items:
             #     head_dict[h_id+n_users].append((t_id,r_id))
-            head_dict[h_id+n_users].append((t_id,r_id))
+            head_dict[h_id+n_users].append((t_id+n_users,r_id))  #remap entity
+            assert h_id<=n_entities
     return head_dict
 
 
@@ -170,11 +171,9 @@ if __name__ == '__main__':
     """get user --item -- entity"""
     user_entity_mat_list,left_relations,init_prefers=find_user_entity_neigh(adj_mat_list,n_users,n_nodes)
     prefer_graphs=build_prefer_graph(user_entity_mat_list,init_prefers)
-    head_dict=build_head_dict(adj_mat_list,left_relations,n_users,n_items)
-
+    head_dict=build_head_dict(adj_mat_list,left_relations,n_users,n_entities)
     exist_nodes=[i for i in range(n_items+n_users)] #cl部分
     n_params['n_prefers']=2*n_relations
-
 
     """cf data"""
     train_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in train_cf], np.int32))
@@ -239,6 +238,7 @@ if __name__ == '__main__':
         loss, s= 0, 0
         train_s_t = time()
         index_3rd,type_3rd=model.find_three_level_neigh(2,1,head_dict,batch_size=1024)
+        # print("3rd index size:",index_3rd.shape)
         print("get 3rd neigh time:",time()-train_s_t)
         while s + args.batch_size <= len(train_cf):
             batch = get_feed_dict(train_cf_pairs,

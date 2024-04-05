@@ -635,7 +635,8 @@ class GraphConv(nn.Module):
             for entity_2nd in topk_entities[i]:
                 if entity_2nd == -1:
                     continue
-                entities_3rd = np.random.choice(head_dict[entity_2nd],size=min(len(head_dict[entity_2nd]),K_3),replace=False)
+                now_list=head_dict[entity_2nd.item()]
+                entities_3rd = random.sample(now_list,min(K_3,len(head_dict[entity_2nd.item()])))
                 for e,r in entities_3rd:
                     indexs.append((u,e))
                     types.append((r))
@@ -659,9 +660,10 @@ class GraphConv(nn.Module):
         
         unique_users, inverse_indices = torch.unique_consecutive(sorted_user_indices, return_inverse=True)
 
-        # 使用inverse_indices来计算每个唯一元素在原始数组中的起始索引
+        # # 使用inverse_indices来计算每个唯一元素在原始数组中的起始索引
         counts = torch.bincount(inverse_indices)
         first_unique_indices = torch.zeros_like(counts).scatter_(0, torch.arange(len(counts)).to(counts.device), counts).cumsum(0) - counts
+
 
         # 为了获取每个用户的Top-K，初始化存储结果的列表
         topk_entities = torch.full((len(unique_users), K), -1, dtype=torch.long)  # 使用-1作为填充值
@@ -670,7 +672,8 @@ class GraphConv(nn.Module):
         for i, user in enumerate(unique_users):
             start_idx = first_unique_indices[i]
             end_idx = first_unique_indices[i + 1] if i + 1 < len(first_unique_indices) else len(sorted_user_indices)
-            
+            # print("start_idx:",start_idx)
+            # print("end_idx:",end_idx)
             # 获取当前用户的得分及其对应的实体索引
             scores = sorted_scores[start_idx:end_idx]
             entities = sorted_entity_indices[start_idx:end_idx]
@@ -812,7 +815,8 @@ class Recommender(nn.Module):
                 select_indexs.append(left_index)
                 select_types.append(left_type)
         if extra_index is not None and extra_type is not None:
-            extra_index = extra_index.t()
+            extra_index = extra_index.t().cpu()
+            extra_type=extra_type.cpu()
             random_numbers = torch.rand(extra_index.size(0))
             mask = random_numbers <= keep_rate
             left_index=extra_index[mask,:]
@@ -832,12 +836,13 @@ class Recommender(nn.Module):
         item_emb = self.all_embed[self.n_users:, :]
         # entity_gcn_emb: [n_entity, channel]
         # user_gcn_emb: [n_users, channel]
-        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate,
-                                                             index_3rd,type_3rd)
-        # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
-        # if index_3rd is not None and type_3rd is not None:
-        #     extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
-        #     extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
+        # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate,
+        #                                                      index_3rd,type_3rd)
+
+        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
+        if index_3rd is not None and type_3rd is not None:
+            extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
+            extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
 
         # print("extra_edge_index:",extra_edge_type.shape)
         # print("extra_edge_tpye:",extra_edge_type.shape)
@@ -871,13 +876,13 @@ class Recommender(nn.Module):
         user_emb = self.all_embed[:self.n_users, :]
         item_emb = self.all_embed[self.n_users:, :]
 
-        # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
-        # if index_3rd is not None and type_3rd is not None:
-        #     extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
-        #     extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
+        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
+        if index_3rd is not None and type_3rd is not None:
+            extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
+            extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
 
-        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate,
-                                                             index_3rd,type_3rd)
+        # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate,
+        #                                                      index_3rd,type_3rd)
 
         node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
                                                      item_emb,
@@ -903,12 +908,12 @@ class Recommender(nn.Module):
         with torch.no_grad():
             user_emb = self.all_embed[:self.n_users, :]
             item_emb = self.all_embed[self.n_users:, :]
-            # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
-            # if index_3rd is not None and type_3rd is not None:
-            #     extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
-            #     extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
-            extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1,
-                                                             index_3rd,type_3rd)
+            extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
+            if index_3rd is not None and type_3rd is not None:
+                extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
+                extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
+            # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1,
+            #                                                  index_3rd,type_3rd)
             
             node_gcn_emb, node_prefer_emb =     self.gcn.batch_generate(user_emb,
                                                          item_emb,
@@ -963,6 +968,7 @@ class Recommender(nn.Module):
     
     def find_three_level_neigh(self,K_2,K_3,head_dict,batch_size=None):
         extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
+
         return self.gcn.find_three_level_neigh(all_emb=self.all_embed,
                                                extra_edge_index=extra_edge_index,
                                                extra_edge_type=extra_edge_type,
