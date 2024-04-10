@@ -204,6 +204,8 @@ if __name__ == '__main__':
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     # cl_optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    K2=args.K2
+    K3=args.K3
     cur_best_pre_0 = 0
     stopping_step = 0
     should_stop = False
@@ -237,7 +239,7 @@ if __name__ == '__main__':
         """training cf"""
         loss, s= 0, 0
         train_s_t = time()
-        index_3rd,type_3rd=model.find_three_level_neigh(2,1,head_dict,batch_size=1024)
+        index_3rd,type_3rd=model.find_three_level_neigh(K2,K3,head_dict,batch_size=1024)
         # print("3rd index size:",index_3rd.shape)
         print("get 3rd neigh time:",time()-train_s_t)
         while s + args.batch_size <= len(train_cf):
@@ -252,7 +254,7 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             batch_loss.backward()
             optimizer.step()
-
+            # print("batch loss:",batch_loss)
             loss += batch_loss
             s += args.batch_size
 
@@ -306,4 +308,4 @@ if __name__ == '__main__':
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
             print('using time %.4f,  epoch %d: training loss: %.4f  cl loss: %.4f' % (train_cl_e - train_s_t, epoch, loss.item(),cl_loss.item()))
 
-    print('early stopping at %d, recall@10:%.4f' % (epoch, cur_best_pre_0))
+    print('early stopping at %d, recall@20:%.4f' % (epoch, cur_best_pre_0))

@@ -324,12 +324,17 @@ class GraphConv(nn.Module):
         self.W_Q = nn.Parameter(torch.Tensor(channel, channel))
 
         self.W_K = nn.Parameter(torch.Tensor(channel, channel))
-
+        
         self.n_heads = 2
         self.d_k = channel // self.n_heads
 
-        nn.init.xavier_uniform_(self.W_Q)
+        # nn.init.xavier_uniform_(self.W_Q)
+        nn.init.xavier_normal_(self.W_Q, gain=1.414)
+
+
         # nn.init.xavier_uniform_(self.W_K)
+        # self.W_K = nn.Parameter(torch.zeros(channel, channel))
+        nn.init.xavier_normal_(self.W_K, gain=1.414)
 
     def _edge_sampling(self, edge_index, edge_type, rate=0.5):
         # edge_index: [2, -1]
@@ -721,6 +726,9 @@ class Recommender(nn.Module):
         self.keep_rate=args_config.keep_rate
         self.method=args_config.method
 
+        # self.K_2=args_config.K2
+        # self.K_3=args_config.K3
+
         self.device = torch.device("cuda:" + str(args_config.gpu_id)) if args_config.cuda \
                                                                       else torch.device("cpu")
         
@@ -953,6 +961,9 @@ class Recommender(nn.Module):
 
     def create_bpr_loss(self, users, pos_items, neg_items):
         batch_size = users.shape[0]
+        # print("users:",users)
+        # print("pos items:",pos_items)
+        # print("neg items:",neg_items)
         pos_scores = torch.sum(torch.mul(users, pos_items), axis=1)
         neg_scores = torch.sum(torch.mul(users, neg_items), axis=1)
 
@@ -963,7 +974,7 @@ class Recommender(nn.Module):
                        + torch.norm(pos_items) ** 2
                        + torch.norm(neg_items) ** 2) / 2
         emb_loss = self.decay * regularizer / batch_size
-
+        
         return mf_loss + emb_loss, mf_loss, emb_loss
     
     def find_three_level_neigh(self,K_2,K_3,head_dict,batch_size=None):
