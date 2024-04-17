@@ -188,9 +188,7 @@ if __name__ == '__main__':
     print("n_nodes:",n_nodes)
     print("n_prefers:",n_params['n_prefers'])
     print("tau_cl:",args.tau_cl)
-    print("tau_kg:",args.tau_kg)
-    print("tau_prefer:",args.tau_prefer)
-    print("drop_learn:",args.drop_learn)
+    print("neighs:",args.neighs)
 
     """define model"""
     model = Recommender(n_params, args, graph, mean_mat_list[0],prefer_graphs).to(device)
@@ -204,13 +202,11 @@ if __name__ == '__main__':
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     # cl_optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    K2=args.K2
-    K3=args.K3
     cur_best_pre_0 = 0
     stopping_step = 0
     should_stop = False
-    index_3rd=None
-    type_3rd=None
+    index_new=None
+    type_new=None
     print("start training ...")
     for epoch in range(args.epoch):
         # if hasattr(torch.cuda, 'empty_cache'):
@@ -239,15 +235,14 @@ if __name__ == '__main__':
         """training cf"""
         loss, s= 0, 0
         train_s_t = time()
-        index_3rd,type_3rd=model.find_three_level_neigh(K2,K3,head_dict,batch_size=1024)
-        # print("3rd index size:",index_3rd.shape)
-        print("get 3rd neigh time:",time()-train_s_t)
+        # index_new,type_new=model.find_three_level_neigh(head_dict,batch_size=1024)
+        # print("get new neigh time:",time()-train_s_t)
         while s + args.batch_size <= len(train_cf):
             batch = get_feed_dict(train_cf_pairs,
                                   s, s + args.batch_size,
                                   user_dict['train_user_set'])
 
-            batch_loss, _, _ = model(batch,index_3rd,type_3rd)
+            batch_loss, _, _ = model(batch,index_new,type_new)
 
 
             batch_loss = batch_loss
@@ -267,7 +262,7 @@ if __name__ == '__main__':
         while s+args.batch_size_cl <= n_users+n_items:
             batch = generate_train_cl_batch(exist_nodes,args.batch_size_cl)
 
-            batch_loss =model.get_cl_loss(batch,index_3rd,type_3rd)
+            batch_loss =model.get_cl_loss(batch,index_new,type_new)
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -282,7 +277,7 @@ if __name__ == '__main__':
             """testing"""
             # model=model.eval()
             test_s_t = time()
-            ret = test(model, user_dict, n_params,index_3rd,type_3rd)
+            ret = test(model, user_dict, n_params,index_new,type_new)
             test_e_t = time()
 
             train_res = PrettyTable()

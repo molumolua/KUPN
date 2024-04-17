@@ -7,6 +7,13 @@ from time import time
 from utils.scatter import scatter_mean,scatter_sum
 from torch_geometric.utils import softmax as scatter_softmax
 import math
+def prefix_product(lst):
+    
+    result = [lst[0]]  # 初始值设置为列表的第一个元素
+    for num in lst[1:]:  # 从第二个元素开始遍历
+        result.append(result[-1] * num)  # 将前一个结果与当前元素相乘，并追加到结果列表
+    return result
+
 
 class Contrast_2view(nn.Module):
     def __init__(self, cf_dim, kg_dim, hidden_dim, tau, cl_size):
@@ -291,7 +298,7 @@ class GraphConv(nn.Module):
     """
     def __init__(self, channel, n_hops, n_users,
                   n_relations, n_nodes,n_prefers,interact_mat,
-                  node_dropout_rate=0.5, mess_dropout_rate=0.1,tau_prefer=1.5,tau_kg=1.5):
+                  node_dropout_rate=0.5, mess_dropout_rate=0.1):
         super(GraphConv, self).__init__()
         #channel ---> embedding size
         self.convs = nn.ModuleList()
@@ -301,8 +308,6 @@ class GraphConv(nn.Module):
         self.node_dropout_rate = node_dropout_rate
         self.mess_dropout_rate = mess_dropout_rate
 
-        self.tau_prefer=tau_prefer
-        self.tau_kg=tau_kg
 
         initializer = nn.init.xavier_uniform_
         # 关系的embedding
@@ -328,13 +333,17 @@ class GraphConv(nn.Module):
         self.n_heads = 2
         self.d_k = channel // self.n_heads
 
-        # nn.init.xavier_uniform_(self.W_Q)
-        nn.init.xavier_normal_(self.W_Q, gain=1.414)
+        nn.init.xavier_uniform_(self.W_Q)
+        # nn.init.xavier_normal_(self.W_Q, gain=0.2)
 
 
-        # nn.init.xavier_uniform_(self.W_K)
+        nn.init.xavier_uniform_(self.W_K)
         # self.W_K = nn.Parameter(torch.zeros(channel, channel))
-        nn.init.xavier_normal_(self.W_K, gain=1.414)
+        # nn.init.xavier_uniform_(self.W_K, gain=0.01)
+        # # nn.init.uniform_(self.W_K, a=-0.01, b=0.01)
+        # nn.init.normal_(self.W_K, mean=0, std=0.01)
+
+
 
     def _edge_sampling(self, edge_index, edge_type, rate=0.5):
         # edge_index: [2, -1]
@@ -619,7 +628,7 @@ class GraphConv(nn.Module):
         return edge_attn_score
     
     @torch.no_grad()
-    def find_three_level_neigh(self,all_emb,extra_edge_index,extra_edge_type,head_dict,K_2,K_3,n_users,n_relations,batch_size=None):
+    def find_three_level_neigh(self,all_emb,extra_edge_index,extra_edge_type,head_dict,n_users,n_relations,batch_size=None,Ks=[2,1]):
         mask = (extra_edge_index[0] <=n_users) & (extra_edge_type  >0)
 
         extra_edge_index=extra_edge_index[:,mask]
@@ -630,30 +639,44 @@ class GraphConv(nn.Module):
             edge_attn_score=self.batch_calc_attn_score(all_emb,extra_edge_index,extra_edge_type,batch_size)
         else:
             edge_attn_score=self.calc_attn_score(all_emb,extra_edge_index,extra_edge_type)
+        
+        K_mul =prefix_product(Ks[:-1])
+        unique_users,topk_entities=self.find_topk_entities(extra_edge_index,edge_attn_score,Ks[0],max(K_mul))
 
-        unique_users,topk_entities=self.find_topk_entities(extra_edge_index,edge_attn_score,K_2)
 
-
+        back_entities=topk_entities
+        nxt_entities = torch.full((len(unique_users), max(K_mul)+1), -1, dtype=torch.long)  # 使用-1作为填充值
         indexs=[]
         types=[]
-        for i,u in enumerate(unique_users):
-            for entity_2nd in topk_entities[i]:
-                if entity_2nd == -1:
-                    continue
-                now_list=head_dict[entity_2nd.item()]
-                entities_3rd = random.sample(now_list,min(K_3,len(head_dict[entity_2nd.item()])))
-                for e,r in entities_3rd:
-                    indexs.append((u,e))
-                    types.append((r))
-                    indexs.append((e,u))
-                    types.append((r+n_relations))
+        l = len(Ks[1:])
+        for  ik,K in enumerate(Ks[1:]):
+            for i,u in enumerate(unique_users):
+                cnt=0
+                for entity in back_entities[i]:
+                    if entity == -1:
+                        break
+                    now_list=head_dict[entity.item()]
+                    entities_nxt = random.sample(now_list,min(K,len(head_dict[entity.item()])))
+                    for e,r in entities_nxt:
+                        indexs.append((u,e))
+                        types.append((r))
+                        indexs.append((e,u))
+                        types.append((r+n_relations))
+                        if ik<l-1:  #0
+                            nxt_entities[i][cnt]=e
+                            cnt+=1
+                nxt_entities[i][cnt]=-1
+
+            back_entities=nxt_entities.clone()
+
+
 
         return torch.tensor(indexs).t().long().to(all_emb.device),torch.tensor(types).long().to(all_emb.device)
 
 
 
 
-    def find_topk_entities(self,edge_index, edge_scores, K):
+    def find_topk_entities(self,edge_index, edge_scores, K,maxK):
         # edge_index的第一行包含用户索引
         user_indices = edge_index[0]
         
@@ -671,7 +694,7 @@ class GraphConv(nn.Module):
 
 
         # 为了获取每个用户的Top-K，初始化存储结果的列表
-        topk_entities = torch.full((len(unique_users), K), -1, dtype=torch.long)  # 使用-1作为填充值
+        topk_entities = torch.full((len(unique_users), maxK+1), -1, dtype=torch.long)  # 使用-1作为填充值
         
         # 遍历每个用户，获取Top-K
         for i, user in enumerate(unique_users):
@@ -717,17 +740,17 @@ class Recommender(nn.Module):
         self.mess_dropout = args_config.mess_dropout
         self.mess_dropout_rate = args_config.mess_dropout_rate
 
-        self.drop_learn=args_config.drop_learn
+        # self.drop_learn=args_config.drop_learn
 
 
-        self.tau_prefer=args_config.tau_prefer
-        self.tau_kg=args_config.tau_kg
+        # self.tau_prefer=args_config.tau_prefer
+        # self.tau_kg=args_config.tau_kg
         self.tau_cl=args_config.tau_cl
         self.keep_rate=args_config.keep_rate
         self.method=args_config.method
 
-        # self.K_2=args_config.K2
-        # self.K_3=args_config.K3
+        self.neighs=eval(args_config.neighs)
+
 
         self.device = torch.device("cuda:" + str(args_config.gpu_id)) if args_config.cuda \
                                                                       else torch.device("cpu")
@@ -770,9 +793,7 @@ class Recommender(nn.Module):
                          n_prefers=self.n_prefers,
                          interact_mat=self.interact_mat,
                          node_dropout_rate=self.node_dropout_rate,
-                         mess_dropout_rate=self.mess_dropout_rate,
-                         tau_kg=self.tau_kg,
-                         tau_prefer=self.tau_prefer)
+                         mess_dropout_rate=self.mess_dropout_rate)
 
     def _convert_sp_mat_to_sp_tensor(self, X):
         coo = X.tocoo()
@@ -835,7 +856,7 @@ class Recommender(nn.Module):
 
         return torch.concat(select_indexs,dim=0).t().to(self.device),torch.concat(select_types,dim=0).to(self.device)
 
-    def forward(self, batch=None,index_3rd=None,type_3rd=None):
+    def forward(self, batch=None,index_new=None,type_new=None):
         user = batch['users']
         pos_item = batch['pos_items']
         neg_item = batch['neg_items']
@@ -845,12 +866,12 @@ class Recommender(nn.Module):
         # entity_gcn_emb: [n_entity, channel]
         # user_gcn_emb: [n_users, channel]
         # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate,
-        #                                                      index_3rd,type_3rd)
+        #                                                      index_new,type_new)
 
         extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
-        if index_3rd is not None and type_3rd is not None:
-            extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
-            extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
+        if index_new is not None and type_new is not None:
+            extra_edge_index=torch.concat([extra_edge_index,index_new],dim=1)
+            extra_edge_type=torch.concat([extra_edge_type,type_new],dim=0)
 
         # print("extra_edge_index:",extra_edge_type.shape)
         # print("extra_edge_tpye:",extra_edge_type.shape)
@@ -863,7 +884,6 @@ class Recommender(nn.Module):
                                                      extra_edge_type,
                                                      mess_dropout=self.mess_dropout,
                                                      node_dropout=self.node_dropout,
-                                                     drop_learn=self.drop_learn,
                                                      method=self.method)
 
         
@@ -880,17 +900,17 @@ class Recommender(nn.Module):
 
         return self.create_bpr_loss(u_e, pos_e, neg_e)
 
-    def get_cl_loss(self,batch_nodes,index_3rd=None,type_3rd=None):
+    def get_cl_loss(self,batch_nodes,index_new=None,type_new=None):
         user_emb = self.all_embed[:self.n_users, :]
         item_emb = self.all_embed[self.n_users:, :]
 
         extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
-        if index_3rd is not None and type_3rd is not None:
-            extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
-            extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
+        if index_new is not None and type_new is not None:
+            extra_edge_index=torch.concat([extra_edge_index,index_new],dim=1)
+            extra_edge_type=torch.concat([extra_edge_type,type_new],dim=0)
 
         # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate,
-        #                                                      index_3rd,type_3rd)
+        #                                                      index_new,type_new)
 
         node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
                                                      item_emb,
@@ -901,7 +921,6 @@ class Recommender(nn.Module):
                                                      extra_edge_type,
                                                      mess_dropout=self.mess_dropout,
                                                      node_dropout=self.node_dropout,
-                                                     drop_learn=self.drop_learn,
                                                      method=self.method)
         # user_prefer_emb=node_prefer_emb[:self.n_users]
         # entity_prefer_emb=node_prefer_emb[self.n_users:]
@@ -912,16 +931,16 @@ class Recommender(nn.Module):
         loss = self.cl_alpha*cl_loss
         return loss
     
-    def generate(self,index_3rd=None,type_3rd=None):
+    def generate(self,index_new=None,type_new=None):
         with torch.no_grad():
             user_emb = self.all_embed[:self.n_users, :]
             item_emb = self.all_embed[self.n_users:, :]
             extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
-            if index_3rd is not None and type_3rd is not None:
-                extra_edge_index=torch.concat([extra_edge_index,index_3rd],dim=1)
-                extra_edge_type=torch.concat([extra_edge_type,type_3rd],dim=0)
+            if index_new is not None and type_new is not None:
+                extra_edge_index=torch.concat([extra_edge_index,index_new],dim=1)
+                extra_edge_type=torch.concat([extra_edge_type,type_new],dim=0)
             # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1,
-            #                                                  index_3rd,type_3rd)
+            #                                                  index_new,type_new)
             
             node_gcn_emb, node_prefer_emb =     self.gcn.batch_generate(user_emb,
                                                          item_emb,
@@ -977,15 +996,14 @@ class Recommender(nn.Module):
         
         return mf_loss + emb_loss, mf_loss, emb_loss
     
-    def find_three_level_neigh(self,K_2,K_3,head_dict,batch_size=None):
+    def find_three_level_neigh(self,head_dict,batch_size=None):
         extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
 
         return self.gcn.find_three_level_neigh(all_emb=self.all_embed,
                                                extra_edge_index=extra_edge_index,
                                                extra_edge_type=extra_edge_type,
                                                head_dict=head_dict,
-                                               K_2=K_2,
-                                               K_3=K_3,
                                                n_users=self.n_users,
                                                n_relations=self.n_relations,
-                                               batch_size=batch_size)
+                                               batch_size=batch_size,
+                                               Ks=self.neighs)
