@@ -40,8 +40,8 @@ def parse_args():
     parser.add_argument('--context_hops', type=int, default=3, help='number of context hops')
 
     # ===== contrast and drop learner===== #
-    parser.add_argument("--tau_prefer",type=float,default=0.7)
-    parser.add_argument("--tau_kg",type=float,default=1.5)
+    # parser.add_argument("--tau_prefer",type=float,default=0.7)
+    # parser.add_argument("--tau_kg",type=float,default=1.5)
     parser.add_argument("--tau_cl",type=float,default=0.7)
     parser.add_argument("--cl_alpha",type=float,default=0.1)
     # parser.add_argument("--K2",type=int,default=2)

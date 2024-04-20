@@ -191,7 +191,7 @@ if __name__ == '__main__':
     print("neighs:",args.neighs)
 
     """define model"""
-    model = Recommender(n_params, args, graph, mean_mat_list[0],prefer_graphs).to(device)
+    model = Recommender(n_params, args, graph, mean_mat_list[0],prefer_graphs,init_prefers).to(device)
 
 
     # model = Recommender(n_params, args, graph, mean_mat_list[0],prefer_graph)
@@ -212,7 +212,7 @@ if __name__ == '__main__':
         # if hasattr(torch.cuda, 'empty_cache'):
         #     torch.cuda.empty_cache()
         # model=model.train()
-        '''test'''
+        # '''test'''
         # model=model.eval()
         # test_s_t = time()
         # ret = test(model, user_dict, n_params)
@@ -235,8 +235,9 @@ if __name__ == '__main__':
         """training cf"""
         loss, s= 0, 0
         train_s_t = time()
-        # index_new,type_new=model.find_three_level_neigh(head_dict,batch_size=1024)
-        # print("get new neigh time:",time()-train_s_t)
+        index_new,type_new=model.find_three_level_neigh(head_dict,batch_size=1024)
+        print("get new neigh time:",time()-train_s_t)
+
         while s + args.batch_size <= len(train_cf):
             batch = get_feed_dict(train_cf_pairs,
                                   s, s + args.batch_size,

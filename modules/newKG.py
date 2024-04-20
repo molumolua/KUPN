@@ -229,9 +229,10 @@ class Aggregator(nn.Module):
         
 
 
-    def batch_generate(self,all_emb,edge_index,edge_type,weight,aug_edge_weight=None,batch_size=1024,zero_rate=1.0,div=False,with_relation=True):
+    def batch_generate(self,all_emb,edge_index,edge_type,weight,prefers,aug_edge_weight=None,batch_size=1024,zero_rate=1.0,div=False,with_relation=True):
         """aggregate"""
-        zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2) #user item
+        zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2) | (~torch.isin(edge_type, prefers))  #user --item or user -- path
+        # zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2)
         zero_degrees,zero_contrib_sum=self.batch_get_contribute(all_emb,edge_index,edge_type,weight,zero_mask,batch_size,aug_edge_weight,zero_rate,with_relation)
 
 
@@ -459,7 +460,7 @@ class GraphConv(nn.Module):
         return gcn_res_emb,node_res_emb
     
     def batch_generate(self, user_emb, entity_emb,  interact_mat,edge_index, edge_type,
-               extra_edge_index,extra_edge_type,method,keep_rate):
+               extra_edge_index,extra_edge_type,method,keep_rate,prefers):
         
         node_emb  = torch.concat([user_emb,entity_emb],dim=0)
         entity_res_emb = entity_emb                               # [n_entity, channel]
@@ -479,6 +480,7 @@ class GraphConv(nn.Module):
                 entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight,div=True)
                 node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight,
                                                         aug_edge_weight=aug_extra_edge_weight,
+                                                        prefers=torch.tensor(prefers).to(node_emb.device),
                                                         zero_rate=1.0/keep_rate,
                                                         div=True,
                                                         with_relation=False)
@@ -560,16 +562,7 @@ class GraphConv(nn.Module):
     #     # print(edge_attn_score.shape)
     #     return edge_attn_score
 
-    
-    def calc_attn_score(self,all_emb,edge_index,edge_type):
-        n_nodes = all_emb.shape[0]
-        head, tail = edge_index
-
-        # h_r = all_emb[head] * self.extra_weight[edge_type]
-        # h_r = h_r @ self.W_Q
-        # t_r = all_emb[tail] * self.extra_weight[edge_type]
-        # t_r = t_r @ self.W_K
-
+    def calc_attn_score_core(self,all_emb,edge_type,head,tail):
         h_r = all_emb[head] @ self.W_Q
         h_r = h_r * self.extra_weight[edge_type]
         t_r = all_emb[tail]  @ self.W_K
@@ -580,10 +573,16 @@ class GraphConv(nn.Module):
         t_r = t_r/torch.norm(t_r,dim=1,keepdim=True)
 
         edge_attn = (h_r * t_r).sum(dim=-1)
-        # softmax by head_node
+        return edge_attn
+
+    
+    def calc_attn_score(self,all_emb,edge_index,edge_type):
+        head, tail = edge_index
+        edge_attn = self.calc_attn_score_core(all_emb,edge_type,head,tail)
         edge_attn_score = scatter_softmax(edge_attn, head)
         
         return edge_attn_score
+    
     
     def batch_calc_attn_score(self,all_emb,edge_index,edge_type,batch_size=1024):
         n_nodes = all_emb.shape[0]
@@ -599,36 +598,20 @@ class GraphConv(nn.Module):
             head_batch = head[start_idx:end_idx]
             tail_batch = tail[start_idx:end_idx]
             edge_type_batch = edge_type[start_idx:end_idx]
-
-            # h_r_batch = all_emb[head_batch] * self.extra_weight[edge_type_batch]
-            # h_r_batch = h_r_batch @ self.W_Q
-            # t_r_batch = all_emb[tail_batch] * self.extra_weight[edge_type_batch]
-            # t_r_batch = t_r_batch @ self.W_K
-
-            h_r_batch = all_emb[head_batch] @ self.W_Q
-            h_r_batch = h_r_batch * self.extra_weight[edge_type_batch]
-            t_r_batch = all_emb[tail_batch] @ self.W_K
-            t_r_batch = t_r_batch * self.extra_weight[edge_type_batch]
-
-            h_r_batch = h_r_batch/torch.norm(h_r_batch,dim=1,keepdim=True)
-            t_r_batch = t_r_batch/torch.norm(t_r_batch,dim=1,keepdim=True)
-
-            edge_attn = (h_r_batch * t_r_batch).sum(dim=-1)
+            
+            edge_attn=self.calc_attn_score_core(all_emb,edge_type_batch,head_batch,tail_batch)
             edge_attns.append(edge_attn)
 
         edge_attn =torch.concat(edge_attns,dim=0)
         # softmax by head_node
         edge_attn_score = scatter_softmax(edge_attn, head)
-        # # normalization by head_node degree
-        # norm = scatter_sum(torch.ones_like(head), head, dim=0, dim_size=n_nodes)
-        # norm = torch.index_select(norm, 0, head)
-        # edge_attn_score = edge_attn_score * norm
 
-        # print(edge_attn_score.shape)
         return edge_attn_score
     
     @torch.no_grad()
     def find_three_level_neigh(self,all_emb,extra_edge_index,extra_edge_type,head_dict,n_users,n_relations,batch_size=None,Ks=[2,1]):
+        if len(Ks)<=1:
+            return None,None    
         mask = (extra_edge_index[0] <=n_users) & (extra_edge_type  >0)
 
         extra_edge_index=extra_edge_index[:,mask]
@@ -639,24 +622,38 @@ class GraphConv(nn.Module):
             edge_attn_score=self.batch_calc_attn_score(all_emb,extra_edge_index,extra_edge_type,batch_size)
         else:
             edge_attn_score=self.calc_attn_score(all_emb,extra_edge_index,extra_edge_type)
-        
-        K_mul =prefix_product(Ks[:-1])
-        unique_users,topk_entities=self.find_topk_entities(extra_edge_index,edge_attn_score,Ks[0],max(K_mul))
+        unique_users,topk_entities=self.find_topk_entities(extra_edge_index,edge_attn_score,Ks[0],max(Ks))
 
 
         back_entities=topk_entities
-        nxt_entities = torch.full((len(unique_users), max(K_mul)+1), -1, dtype=torch.long)  # 使用-1作为填充值
+        nxt_entities = torch.full((len(unique_users), max(Ks)+1), -1, dtype=torch.long)  # 使用-1作为填充值
         indexs=[]
         types=[]
         l = len(Ks[1:])
         for  ik,K in enumerate(Ks[1:]):
             for i,u in enumerate(unique_users):
+                now_head=torch.tensor(u)
+                now_entities=[]
                 cnt=0
                 for entity in back_entities[i]:
                     if entity == -1:
                         break
                     now_list=head_dict[entity.item()]
-                    entities_nxt = random.sample(now_list,min(K,len(head_dict[entity.item()])))
+                    if len(now_list)>0:
+                        entities_back = random.sample(now_list,min(3*K,len(head_dict[entity.item()])))
+                        now_entities.extend(entities_back)
+                if len(now_entities)>0:    
+                    now_list=torch.tensor(now_entities).to(all_emb.device)
+                    now_type=now_list[:,1]
+                    now_tail=now_list[:,0]
+                    attn_score=F.softmax(self.calc_attn_score_core(all_emb,edge_type=now_type,head=now_head,tail=now_tail))
+                    # print("attn score:",attn_score)
+                    noise = torch.randn_like(attn_score) * 0.1
+                    noisy_scores =attn_score + noise
+                    topk_vals, topk_indices = torch.topk(noisy_scores, k=K)
+                    entity_nxt = now_tail[topk_indices].unsqueeze(-1)
+                    type_nxt = now_type[topk_indices].unsqueeze(-1)
+                    entities_nxt = torch.concat([entity_nxt,type_nxt],dim=1).tolist()
                     for e,r in entities_nxt:
                         indexs.append((u,e))
                         types.append((r))
@@ -667,8 +664,36 @@ class GraphConv(nn.Module):
                             cnt+=1
                 nxt_entities[i][cnt]=-1
 
-            back_entities=nxt_entities.clone()
+                # for entity in back_entities[i]:
+                #     if entity == -1:
+                #         break
+                #     now_list=head_dict[entity.item()]
 
+                #     if len(now_list)>0:
+                #         now_list=torch.tensor(head_dict[entity.item()]).to(all_emb.device) 
+                #         now_type=now_list[:,1]
+                #         now_tail=now_list[:,0]
+                #         attn_score=F.softmax(self.calc_attn_score_core(all_emb,edge_type=now_type,head=now_head,tail=now_tail))
+                #         # print("attn score:",attn_score)
+                #         noise = torch.randn_like(attn_score) * 0.1
+                #         noisy_scores =attn_score + noise
+                #         topk_vals, topk_indices = torch.topk(noisy_scores, k=K)
+                #         entity_nxt = now_tail[topk_indices].unsqueeze(-1)
+                #         type_nxt = now_type[topk_indices].unsqueeze(-1)
+                #         entities_nxt = torch.concat([entity_nxt,type_nxt],dim=1).tolist()
+                #         # now_list=head_dict[entity.item()]
+                #         # entities_nxt = random.sample(now_list,min(K,len(head_dict[entity.item()])))
+                #         for e,r in entities_nxt:
+                #             indexs.append((u,e))
+                #             types.append((r))
+                #             indexs.append((e,u))
+                #             types.append((r+n_relations))
+                #             if ik<l-1:  #0
+                #                 nxt_entities[i][cnt]=e
+                #                 cnt+=1
+                # nxt_entities[i][cnt]=-1
+
+            back_entities=nxt_entities.clone()
 
 
         return torch.tensor(indexs).t().long().to(all_emb.device),torch.tensor(types).long().to(all_emb.device)
@@ -718,7 +743,7 @@ class GraphConv(nn.Module):
         
 
 class Recommender(nn.Module):
-    def __init__(self, data_config, args_config, graph, adj_mat,extra_graphs):
+    def __init__(self, data_config, args_config, graph, adj_mat,extra_graphs,init_prefers=None):
         super(Recommender, self).__init__()
 
         self.n_users = data_config['n_users']
@@ -745,6 +770,7 @@ class Recommender(nn.Module):
 
         # self.tau_prefer=args_config.tau_prefer
         # self.tau_kg=args_config.tau_kg
+        self.init_prefers=init_prefers
         self.tau_cl=args_config.tau_cl
         self.keep_rate=args_config.keep_rate
         self.method=args_config.method
@@ -950,7 +976,8 @@ class Recommender(nn.Module):
                                                          extra_edge_index,
                                                          extra_edge_type,
                                                          self.method,
-                                                         self.keep_rate)
+                                                         self.keep_rate,
+                                                         self.init_prefers)
             # node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
             #                                             item_emb,
             #                                             self.interact_mat,
