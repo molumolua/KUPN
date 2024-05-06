@@ -229,10 +229,10 @@ class Aggregator(nn.Module):
         
 
 
-    def batch_generate(self,all_emb,edge_index,edge_type,weight,prefers,aug_edge_weight=None,batch_size=1024,zero_rate=1.0,div=False,with_relation=True):
+    def batch_generate(self,all_emb,edge_index,edge_type,weight,prefers,aug_edge_weight=None,batch_size=16777216,zero_rate=1.0,div=False,with_relation=True):
         """aggregate"""
-        zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2) | (~torch.isin(edge_type, prefers))  #user --item or user -- path
-        # zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2)
+        # zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2) | (~torch.isin(edge_type, prefers))  #user --item or user -- path
+        zero_mask=(edge_type == 0) | (edge_type == self.n_prefers/2)
         zero_degrees,zero_contrib_sum=self.batch_get_contribute(all_emb,edge_index,edge_type,weight,zero_mask,batch_size,aug_edge_weight,zero_rate,with_relation)
 
 
@@ -299,9 +299,10 @@ class GraphConv(nn.Module):
     """
     def __init__(self, channel, n_hops, n_users,
                   n_relations, n_nodes,n_prefers,interact_mat,
-                  node_dropout_rate=0.5, mess_dropout_rate=0.1):
+                  node_dropout_rate=0.5, mess_dropout_rate=0.1,device=None):
         super(GraphConv, self).__init__()
         #channel ---> embedding size
+        self.device=device
         self.convs = nn.ModuleList()
         self.n_relations = n_relations
         self.n_users = n_users
@@ -475,15 +476,21 @@ class GraphConv(nn.Module):
         # user_res_emb = [user_emb]
         with torch.no_grad():
             aug_extra_edge_weight=self.batch_calc_attn_score(node_emb,extra_edge_index,extra_edge_type)
+            if keep_rate ==0:
+                aug_extra_edge_weight=aug_extra_edge_weight.unsqueeze(-1)
             for i in range(len(self.convs)):
                 #all_emb,edge_index,edge_type,weight,aug_edge_weight=None
                 entity_emb = self.convs[i](entity_emb,edge_index,edge_type-1,self.weight,div=True)
-                node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight,
-                                                        aug_edge_weight=aug_extra_edge_weight,
-                                                        prefers=torch.tensor(prefers).to(node_emb.device),
-                                                        zero_rate=1.0/keep_rate,
-                                                        div=True,
-                                                        with_relation=False)
+                if keep_rate == 0:
+                    node_emb = self.convs[i](node_emb,extra_edge_index,extra_edge_type,self.extra_weight,
+                                     aug_extra_edge_weight,div=True,with_relation=False)
+                else:
+                    node_emb = self.convs[i].batch_generate(node_emb,extra_edge_index,extra_edge_type,self.extra_weight,
+                                                            aug_edge_weight=aug_extra_edge_weight,
+                                                            prefers=torch.tensor(prefers).to(node_emb.device),
+                                                            zero_rate=1.0/keep_rate,
+                                                            div=True,
+                                                            with_relation=False)
                 
                 user_emb =torch.sparse.mm(interact_mat,entity_emb)
 
@@ -609,9 +616,10 @@ class GraphConv(nn.Module):
         return edge_attn_score
     
     @torch.no_grad()
-    def find_three_level_neigh(self,all_emb,extra_edge_index,extra_edge_type,head_dict,n_users,n_relations,batch_size=None,Ks=[2,1]):
+    def find_high_order_neigh(self,all_emb,extra_edge_index,extra_edge_type,head_dict,n_users,n_relations,batch_size=None,Ks=[2,1]):
         if len(Ks)<=1:
-            return None,None    
+            return None,None
+        high_order_set=set()    
         mask = (extra_edge_index[0] <=n_users) & (extra_edge_type  >0)
 
         extra_edge_index=extra_edge_index[:,mask]
@@ -634,7 +642,7 @@ class GraphConv(nn.Module):
             for i,u in enumerate(unique_users):
                 now_head=torch.tensor(u)
                 now_entities=[]
-                cnt=0
+                cnt=0 #user 这一阶上的所有的entity
                 for entity in back_entities[i]:
                     if entity == -1:
                         break
@@ -642,13 +650,14 @@ class GraphConv(nn.Module):
                     if len(now_list)>0:
                         entities_back = random.sample(now_list,min(3*K,len(head_dict[entity.item()])))
                         now_entities.extend(entities_back)
+                        
                 if len(now_entities)>0:    
                     now_list=torch.tensor(now_entities).to(all_emb.device)
                     now_type=now_list[:,1]
                     now_tail=now_list[:,0]
                     attn_score=F.softmax(self.calc_attn_score_core(all_emb,edge_type=now_type,head=now_head,tail=now_tail))
                     # print("attn score:",attn_score)
-                    noise = torch.randn_like(attn_score) * 0.1
+                    noise = torch.randn_like(attn_score) * 0
                     noisy_scores =attn_score + noise
                     topk_vals, topk_indices = torch.topk(noisy_scores, k=K)
                     entity_nxt = now_tail[topk_indices].unsqueeze(-1)
@@ -659,6 +668,7 @@ class GraphConv(nn.Module):
                         types.append((r))
                         indexs.append((e,u))
                         types.append((r+n_relations))
+                        high_order_set.add(e)
                         if ik<l-1:  #0
                             nxt_entities[i][cnt]=e
                             cnt+=1
@@ -696,11 +706,34 @@ class GraphConv(nn.Module):
             back_entities=nxt_entities.clone()
 
 
-        return torch.tensor(indexs).t().long().to(all_emb.device),torch.tensor(types).long().to(all_emb.device)
+        return torch.tensor(indexs).t().long().to(all_emb.device),torch.tensor(types).long().to(all_emb.device),high_order_set
 
 
 
 
+    def select_low_order_neigh(self,all_emb,indexs,types,keep_rate):
+        select_indexs=[]
+        select_types=[]
+        for i in range(len(indexs)):
+            index=indexs[i]
+            type=types[i]
+            if type[0] ==0 or type[0]==self.n_relations:
+                select_indexs.append(index)
+                select_types.append(type)
+                continue
+
+            attn_score=self.calc_attn_score_core(all_emb,edge_type=type,head=index[:,0],tail=index[:,1])
+            topk_vals, topk_indices = torch.topk(attn_score, k=int(keep_rate*index.shape[0]))
+            topk_indices =topk_indices.to(index.device)
+
+            left_index=index[topk_indices,:]
+            left_type=type[topk_indices]
+            if(left_index.shape[0]>0):
+                select_indexs.append(left_index)
+                select_types.append(left_type)
+
+        return torch.concat(select_indexs,dim=0).t().to(self.device),torch.concat(select_types,dim=0).to(self.device)
+    
     def find_topk_entities(self,edge_index, edge_scores, K,maxK):
         # edge_index的第一行包含用户索引
         user_indices = edge_index[0]
@@ -819,7 +852,8 @@ class Recommender(nn.Module):
                          n_prefers=self.n_prefers,
                          interact_mat=self.interact_mat,
                          node_dropout_rate=self.node_dropout_rate,
-                         mess_dropout_rate=self.mess_dropout_rate)
+                         mess_dropout_rate=self.mess_dropout_rate,
+                         device=self.device)
 
     def _convert_sp_mat_to_sp_tensor(self, X):
         coo = X.tocoo()
@@ -930,26 +964,51 @@ class Recommender(nn.Module):
         user_emb = self.all_embed[:self.n_users, :]
         item_emb = self.all_embed[self.n_users:, :]
 
-        extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
+        # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
+        # if index_new is not None and type_new is not None:
+        #     extra_edge_index=torch.concat([extra_edge_index,index_new],dim=1)
+        #     extra_edge_type=torch.concat([extra_edge_type,type_new],dim=0)
+
+        # # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate,
+        # #                                                      index_new,type_new)
+
+        # node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
+        #                                              item_emb,
+        #                                              self.interact_mat,
+        #                                              self.edge_index,
+        #                                              self.edge_type,
+        #                                              extra_edge_index,
+        #                                              extra_edge_type,
+        #                                              mess_dropout=self.mess_dropout,
+        #                                              node_dropout=self.node_dropout,
+        #                                              method=self.method)
+        # # user_prefer_emb=node_prefer_emb[:self.n_users]
+        # # entity_prefer_emb=node_prefer_emb[self.n_users:]
+
+        if self.keep_rate ==0:
+            extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,0)
+        else:
+            extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
+
+
         if index_new is not None and type_new is not None:
             extra_edge_index=torch.concat([extra_edge_index,index_new],dim=1)
             extra_edge_type=torch.concat([extra_edge_type,type_new],dim=0)
 
-        # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,self.keep_rate,
-        #                                                      index_new,type_new)
-
-        node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
-                                                     item_emb,
-                                                     self.interact_mat,
-                                                     self.edge_index,
-                                                     self.edge_type,
-                                                     extra_edge_index,
-                                                     extra_edge_type,
-                                                     mess_dropout=self.mess_dropout,
-                                                     node_dropout=self.node_dropout,
-                                                     method=self.method)
-        # user_prefer_emb=node_prefer_emb[:self.n_users]
-        # entity_prefer_emb=node_prefer_emb[self.n_users:]
+        # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1,
+        #                                                  index_new,type_new)
+            
+        node_gcn_emb, node_prefer_emb =     self.gcn.batch_generate(user_emb,
+                                                         item_emb,
+                                                         self.interact_mat,
+                                                         self.edge_index,
+                                                         self.edge_type,
+                                                         extra_edge_index,
+                                                         extra_edge_type,
+                                                         self.method,
+                                                         self.keep_rate,
+                                                         self.init_prefers)
+        
 
         batch_gcn_emb =node_gcn_emb[batch_nodes]
         batch_prefer_emb=node_prefer_emb[batch_nodes]
@@ -961,10 +1020,16 @@ class Recommender(nn.Module):
         with torch.no_grad():
             user_emb = self.all_embed[:self.n_users, :]
             item_emb = self.all_embed[self.n_users:, :]
-            extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
+            if self.keep_rate ==0:
+                extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,0)
+            else:
+                extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
+
+
             if index_new is not None and type_new is not None:
                 extra_edge_index=torch.concat([extra_edge_index,index_new],dim=1)
                 extra_edge_type=torch.concat([extra_edge_type,type_new],dim=0)
+
             # extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1,
             #                                                  index_new,type_new)
             
@@ -978,17 +1043,25 @@ class Recommender(nn.Module):
                                                          self.method,
                                                          self.keep_rate,
                                                          self.init_prefers)
-            # node_gcn_emb, node_prefer_emb =     self.gcn(user_emb,
-            #                                             item_emb,
-            #                                             self.interact_mat,
-            #                                             self.edge_index,
-            #                                             self.edge_type,
-            #                                             extra_edge_index,
-            #                                             extra_edge_type,
-            #                                             mess_dropout=False,
-            #                                             node_dropout=False,
-            #                                             drop_learn=self.drop_learn,
-            #                                             method=self.method)
+
+            # extra_edge_index,extra_edge_type=self.gcn.select_low_order_neigh(self.all_embed,self.extra_edge_indexs,self.extra_edge_types,self.keep_rate)
+
+            # if index_new is not None and type_new is not None:
+            #     extra_edge_index=torch.concat([extra_edge_index,index_new],dim=1)
+            #     extra_edge_type=torch.concat([extra_edge_type,type_new],dim=0)
+
+            
+            # node_gcn_emb, node_prefer_emb = self.gcn(user_emb,
+            #                                          item_emb,
+            #                                          self.interact_mat,
+            #                                          self.edge_index,
+            #                                          self.edge_type,
+            #                                          extra_edge_index,
+            #                                          extra_edge_type,
+            #                                          mess_dropout=self.mess_dropout,
+            #                                          node_dropout=self.node_dropout,
+            #                                          method=self.method)
+ 
             
             user_prefer_emb=node_prefer_emb[:self.n_users]
             entity_prefer_emb=node_prefer_emb[self.n_users:]
@@ -1023,10 +1096,10 @@ class Recommender(nn.Module):
         
         return mf_loss + emb_loss, mf_loss, emb_loss
     
-    def find_three_level_neigh(self,head_dict,batch_size=None):
+    def find_high_order_neigh(self,head_dict,batch_size=None):
         extra_edge_index,extra_edge_type=self._select_edges(self.extra_edge_indexs,self.extra_edge_types,1)
 
-        return self.gcn.find_three_level_neigh(all_emb=self.all_embed,
+        return self.gcn.find_high_order_neigh(all_emb=self.all_embed,
                                                extra_edge_index=extra_edge_index,
                                                extra_edge_type=extra_edge_type,
                                                head_dict=head_dict,

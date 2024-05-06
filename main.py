@@ -120,13 +120,16 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
 
 def build_prefer_graph(adj_mat_list,prefers):
     prefer_graphs=[]
+    low_order_set=set()
     for r_id,adj in enumerate(adj_mat_list):
         prefer_graph = nx.MultiDiGraph()
         for h_id, t_id, v in zip(adj.row, adj.col, adj.data):
             prefer_graph.add_edge(h_id, t_id, key=prefers[r_id])
+            low_order_set.add(h_id)
+            low_order_set.add(t_id)
         prefer_graphs.append(prefer_graph)
 
-    return prefer_graphs
+    return prefer_graphs,low_order_set
 
 
 def build_head_dict(adj_mat_list,left_relations,n_users,n_etities):
@@ -170,9 +173,11 @@ if __name__ == '__main__':
 
     """get user --item -- entity"""
     user_entity_mat_list,left_relations,init_prefers=find_user_entity_neigh(adj_mat_list,n_users,n_nodes)
-    prefer_graphs=build_prefer_graph(user_entity_mat_list,init_prefers)
+    prefer_graphs,low_order_set=build_prefer_graph(user_entity_mat_list,init_prefers)
     head_dict=build_head_dict(adj_mat_list,left_relations,n_users,n_entities)
     exist_nodes=[i for i in range(n_items+n_users)] #cl部分
+
+
     n_params['n_prefers']=2*n_relations
 
     """cf data"""
@@ -212,8 +217,9 @@ if __name__ == '__main__':
         # if hasattr(torch.cuda, 'empty_cache'):
         #     torch.cuda.empty_cache()
         # model=model.train()
+
+        
         # '''test'''
-        # model=model.eval()
         # test_s_t = time()
         # ret = test(model, user_dict, n_params)
         # test_e_t = time()
@@ -235,9 +241,11 @@ if __name__ == '__main__':
         """training cf"""
         loss, s= 0, 0
         train_s_t = time()
-        index_new,type_new=model.find_three_level_neigh(head_dict,batch_size=1024)
+        index_new,type_new,high_order_set=model.find_high_order_neigh(head_dict,batch_size=1024)
         print("get new neigh time:",time()-train_s_t)
-
+        exist_nodes=list(high_order_set.union(low_order_set))
+        # exist_nodes=list(low_order_set)
+        random.shuffle(exist_nodes)
         while s + args.batch_size <= len(train_cf):
             batch = get_feed_dict(train_cf_pairs,
                                   s, s + args.batch_size,
@@ -260,7 +268,7 @@ if __name__ == '__main__':
         s=0
         train_cl_s = time()
         cl_loss=0
-        while s+args.batch_size_cl <= n_users+n_items:
+        while s+args.batch_size_cl <= len(exist_nodes):
             batch = generate_train_cl_batch(exist_nodes,args.batch_size_cl)
 
             batch_loss =model.get_cl_loss(batch,index_new,type_new)
@@ -273,10 +281,9 @@ if __name__ == '__main__':
             s += args.batch_size_cl
 
         train_cl_e = time()
-        # print("train cl time:",train_cl_e-train_cl_s)
+        print("train cl time:",train_cl_e-train_cl_s)
         if epoch % 1 == 0 :
             """testing"""
-            # model=model.eval()
             test_s_t = time()
             ret = test(model, user_dict, n_params,index_new,type_new)
             test_e_t = time()
@@ -286,6 +293,10 @@ if __name__ == '__main__':
             train_res.add_row(
                 [epoch, train_cl_e - train_s_t, test_e_t - test_s_t, loss.item(), cl_loss.item(),ret['recall'], ret['ndcg'], ret['precision'], ret['hit_ratio']]
             )
+            # train_res.field_names = ["Epoch", "training time", "tesing time", "Loss","recall", "ndcg", "precision", "hit_ratio"]
+            # train_res.add_row(
+            #     [epoch, train_cl_e - train_s_t, test_e_t - test_s_t, loss.item(),ret['recall'], ret['ndcg'], ret['precision'], ret['hit_ratio']]
+            # )
             print(train_res)
 
             # *********************************************************
