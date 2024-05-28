@@ -765,7 +765,7 @@ class GraphConv(nn.Module):
             entities = sorted_entity_indices[start_idx:end_idx]
             
             # 提取Top-K得分及其对应实体的索引
-            topk_scores, topk_indices = torch.topk(scores, K, largest=True, sorted=True)
+            topk_scores, topk_indices = torch.topk(scores, min(K,scores.shape[0]), largest=True, sorted=True)
             
             # 存储Top-K实体
             actual_k = min(K, len(entities))  # 实际上可能存在的连接数目可能小于K

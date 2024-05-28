@@ -241,10 +241,10 @@ if __name__ == '__main__':
         """training cf"""
         loss, s= 0, 0
         train_s_t = time()
-        # index_new,type_new,high_order_set=model.find_high_order_neigh(head_dict,batch_size=1024)
-        # print("get new neigh time:",time()-train_s_t)
-        # exist_nodes=list(high_order_set.union(low_order_set))
-        exist_nodes=list(low_order_set)
+        index_new,type_new,high_order_set=model.find_high_order_neigh(head_dict,batch_size=1024)
+        print("get new neigh time:",time()-train_s_t)
+        exist_nodes=list(high_order_set.union(low_order_set))
+        # exist_nodes=list(low_order_set)
         random.shuffle(exist_nodes)
         while s + args.batch_size <= len(train_cf):
             batch = get_feed_dict(train_cf_pairs,
