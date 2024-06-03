@@ -40,13 +40,9 @@ def parse_args():
     parser.add_argument('--context_hops', type=int, default=3, help='number of context hops')
 
     # ===== contrast and drop learner===== #
-    # parser.add_argument("--tau_prefer",type=float,default=0.7)
-    # parser.add_argument("--tau_kg",type=float,default=1.5)
     parser.add_argument("--tau_cl",type=float,default=0.7)
     parser.add_argument("--cl_alpha",type=float,default=0.1)
-    # parser.add_argument("--K2",type=int,default=2)
-    # parser.add_argument("--K3",type=int,default=1)
-    parser.add_argument("--neighs", default='[2,1]')
+    parser.add_argument("--neighs", default='[4,1,1]')
     # ===== save model ===== #
     parser.add_argument("--save", type=bool, default=False, help="save model or not")
     parser.add_argument("--out_dir", type=str, default="./weights/", help="output directory for model")
