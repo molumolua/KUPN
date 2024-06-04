@@ -62,7 +62,7 @@ def generate_train_cl_batch(exist_items,batch_size_cl):
 
 
 def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
-    #返回一个 user-entity的邻接矩阵列表
+
     tot=0
     inter_adj = adj_mat_list[0].copy()
     # print("min inter_adj_col:",min(inter_adj.col))
@@ -107,7 +107,7 @@ def find_user_entity_neigh(adj_mat_list,n_users,n_nodes):
     print("total prefer relations:",tot)
     new_coo_matrices = []
     for matrix in return_adj_mat_list:
-        # 交换行列来创建新的coo_matrix
+
         new_matrix = sp.coo_matrix((matrix.data, (matrix.col, matrix.row)), shape=matrix.shape)
         new_coo_matrices.append(new_matrix)
     return_adj_mat_list +=new_coo_matrices
@@ -175,8 +175,7 @@ if __name__ == '__main__':
     user_entity_mat_list,left_relations,init_prefers=find_user_entity_neigh(adj_mat_list,n_users,n_nodes)
     prefer_graphs,low_order_set=build_prefer_graph(user_entity_mat_list,init_prefers)
     head_dict=build_head_dict(adj_mat_list,left_relations,n_users,n_entities)
-    exist_nodes=[i for i in range(n_items+n_users)] #cl部分
-
+    exist_nodes=[i for i in range(n_items+n_users)] #cl
 
     n_params['n_prefers']=2*n_relations
 

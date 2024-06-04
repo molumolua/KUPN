@@ -9,9 +9,9 @@ from torch_geometric.utils import softmax as scatter_softmax
 import math
 def prefix_product(lst):
     
-    result = [lst[0]]  # 初始值设置为列表的第一个元素
-    for num in lst[1:]:  # 从第二个元素开始遍历
-        result.append(result[-1] * num)  # 将前一个结果与当前元素相乘，并追加到结果列表
+    result = [lst[0]]  
+    for num in lst[1:]:  
+        result.append(result[-1] * num) 
     return result
 
 
@@ -142,16 +142,6 @@ class DropLearner(nn.Module):
 
         return aug_edge_weight
     
-
-        # edge_drop_out_prob = 1 - aug_edge_weight
-        # random_probs = torch.rand(edge_drop_out_prob.shape).to(head_emb.device)
-        # # 比较随机数组与 edge_drop_out_prob 来决定是否保留每条边
-        # edges_to_keep = random_probs > edge_drop_out_prob
-        # kept_edge_index = edge_index[:,edges_to_keep]
-        # kept_edge_type = edge_type[edges_to_keep]
-
-
-        # return kept_edge_index,kept_edge_type
     
 
 class Aggregator(nn.Module):
@@ -181,8 +171,6 @@ class Aggregator(nn.Module):
             neigh_relation_emb = all_emb[tail]
 
         if aug_edge_weight is not None:
-            # neigh_relation_emb = neigh_relation_emb.view(-1, self.n_heads, self.d_k)*aug_edge_weight.view(-1, self.n_heads, 1)
-            # neigh_relation_emb = neigh_relation_emb.view(-1,self.n_heads*self.d_k)
             neigh_relation_emb *=aug_edge_weight
         if div:
             res_emb = scatter_mean(src=neigh_relation_emb, index=head, dim_size=dim, dim=0)
@@ -221,9 +209,9 @@ class Aggregator(nn.Module):
                 neigh_relation_emb_batch *= aug_edge_weight_batch.unsqueeze(-1)
                 # neigh_relation_emb_batch = neigh_relation_emb_batch.view(-1, self.n_heads, self.d_k)*aug_edge_weight_batch.view(-1, self.n_heads, 1)
                 # neigh_relation_emb_batch = neigh_relation_emb_batch.view(-1,self.n_heads*self.d_k)
-            # 累加当前批次的贡献
+
             contrib_sum.index_add_(0, head_batch, neigh_relation_emb_batch*rate)
-            # 累加当前批次每个节点的出现次数
+
             degrees.index_add_(0, head_batch, torch.ones_like(head_batch, dtype=torch.float)*rate)
         return degrees,contrib_sum
         
@@ -250,48 +238,6 @@ class Aggregator(nn.Module):
 
     
 
-    
-
-    # def forward(self, entity_emb, user_emb,  #n种隐关系向量  [n_relations,latend_dim]
-    #             edge_index, edge_type, extra_edge_index, extra_edge_type,  #替换成二阶+一阶 n_relations个矩阵   [n_relations,n_users,n_nodes]
-    #             weight,extra_weight,aug_edge_weight=None,aug_extra_edge_weight=None):
-
-    #     n_entities = entity_emb.shape[0]
-    #     # channel = entity_emb.shape[1]
-    #     # n_users = self.n_users
-    #     n_nodes = self.n_nodes
-    #     # n_relations=self.n_relations
-
-    #     """KG aggregate"""
-    #     head, tail = edge_index
-    #     edge_relation_emb = weight[edge_type - 1]  # exclude interact, remap [1, n_relations) to [0, n_relations-1)
-    #     neigh_relation_emb = entity_emb[tail] * edge_relation_emb  # [-1, channel]
-    #     if aug_edge_weight is not None:
-    #         neigh_relation_emb = neigh_relation_emb*aug_edge_weight
-    #     entity_agg = scatter_mean(src=neigh_relation_emb, index=head, dim_size=n_entities, dim=0)
-
-    #     # """cul user->latent factor attention"""
-    #     # score_ = torch.mm(user_emb, latent_emb.t())
-    #     # score = nn.Softmax(dim=1)(score_).unsqueeze(-1)  # [n_users, n_relations, 1]
-
-    #     # """user aggregate"""
-    #     # user_agg = torch.sparse.mm(interact_mat, entity_emb)  # [n_users, channel]
-    #     # disen_weight = torch.mm(nn.Softmax(dim=-1)(disen_weight_att),
-    #     #                         weight).expand(n_users, n_relations, channel)
-    #     # user_agg = user_agg * (disen_weight * score).sum(dim=1) + user_agg  # [n_users, channel]
-
-    #     """user prefer view aggregate"""
-    #     all_embed= torch.concat([user_emb,entity_emb],dim=0)
-    #     extra_head, extra_tail = extra_edge_index
-    #     extra_edge_relation_emb = extra_weight[extra_edge_type]  #prefer
-    #     extra_neigh_relation_emb = all_embed[extra_tail] * extra_edge_relation_emb  # [-1, channel]
-    #     if aug_extra_edge_weight is not None:
-    #         extra_neigh_relation_emb =extra_neigh_relation_emb*aug_extra_edge_weight
-
-    #     node_agg = scatter_mean(src=extra_neigh_relation_emb, index=extra_head, dim_size=n_nodes, dim=0)
-    #     return entity_agg, node_agg
-
-
 
 class GraphConv(nn.Module):
     """
@@ -312,7 +258,7 @@ class GraphConv(nn.Module):
 
 
         initializer = nn.init.xavier_uniform_
-        # 关系的embedding
+
         weight = initializer(torch.empty(n_relations - 1, channel))  # not include interact
         self.weight = nn.Parameter(weight)  # [n_relations - 1, in_channel]
 
@@ -356,9 +302,9 @@ class GraphConv(nn.Module):
 
     def _edge_sampling_torch(self,edge_index, edge_type, rate=0.5):
         n_edges = edge_index.size(1)
-        # 使用torch.rand生成一个[0, 1)区间的随机张量，然后选择小于给定采样率的索引
+
         mask = torch.rand(n_edges, device=edge_index.device) < rate
-        # 应用掩码选择索引
+
         sampled_edge_index = edge_index[:, mask]
         sampled_edge_type = edge_type[mask]
         return sampled_edge_index, sampled_edge_type
@@ -634,7 +580,7 @@ class GraphConv(nn.Module):
 
 
         back_entities=topk_entities
-        nxt_entities = torch.full((len(unique_users), max(Ks)+1), -1, dtype=torch.long)  # 使用-1作为填充值
+        nxt_entities = torch.full((len(unique_users), max(Ks)+1), -1, dtype=torch.long)  
         indexs=[]
         types=[]
         l = len(Ks[1:])
@@ -642,7 +588,7 @@ class GraphConv(nn.Module):
             for i,u in enumerate(unique_users):
                 now_head=torch.tensor(u)
                 now_entities=[]
-                cnt=0 #user 这一阶上的所有的entity
+                cnt=0 #user 
                 for entity in back_entities[i]:
                     if entity == -1:
                         break
@@ -735,10 +681,9 @@ class GraphConv(nn.Module):
         return torch.concat(select_indexs,dim=0).t().to(self.device),torch.concat(select_types,dim=0).to(self.device)
     
     def find_topk_entities(self,edge_index, edge_scores, K,maxK):
-        # edge_index的第一行包含用户索引
+        # edge_index
         user_indices = edge_index[0]
-        
-        # 按用户索引排序，保持注意力分数与排序同步
+
         sorted_indices = user_indices.argsort()
         sorted_user_indices = user_indices[sorted_indices]
         sorted_entity_indices = edge_index[1][sorted_indices]
@@ -746,29 +691,23 @@ class GraphConv(nn.Module):
         
         unique_users, inverse_indices = torch.unique_consecutive(sorted_user_indices, return_inverse=True)
 
-        # # 使用inverse_indices来计算每个唯一元素在原始数组中的起始索引
+  
         counts = torch.bincount(inverse_indices)
         first_unique_indices = torch.zeros_like(counts).scatter_(0, torch.arange(len(counts)).to(counts.device), counts).cumsum(0) - counts
 
-
-        # 为了获取每个用户的Top-K，初始化存储结果的列表
-        topk_entities = torch.full((len(unique_users), maxK+1), -1, dtype=torch.long)  # 使用-1作为填充值
+        topk_entities = torch.full((len(unique_users), maxK+1), -1, dtype=torch.long) 
         
-        # 遍历每个用户，获取Top-K
         for i, user in enumerate(unique_users):
             start_idx = first_unique_indices[i]
             end_idx = first_unique_indices[i + 1] if i + 1 < len(first_unique_indices) else len(sorted_user_indices)
             # print("start_idx:",start_idx)
             # print("end_idx:",end_idx)
-            # 获取当前用户的得分及其对应的实体索引
             scores = sorted_scores[start_idx:end_idx]
             entities = sorted_entity_indices[start_idx:end_idx]
             
-            # 提取Top-K得分及其对应实体的索引
             topk_scores, topk_indices = torch.topk(scores, min(K,scores.shape[0]), largest=True, sorted=True)
             
-            # 存储Top-K实体
-            actual_k = min(K, len(entities))  # 实际上可能存在的连接数目可能小于K
+            actual_k = min(K, len(entities)) 
             topk_entities[i, :actual_k] = entities[topk_indices][:actual_k]
         
         return unique_users, topk_entities
@@ -790,7 +729,7 @@ class Recommender(nn.Module):
         self.decay = args_config.l2
 
         self.emb_size = args_config.dim
-        self.context_hops = args_config.context_hops #卷积层数
+        self.context_hops = args_config.context_hops
         self.cl_alpha=args_config.cl_alpha
 
         self.node_dropout = args_config.node_dropout
@@ -894,7 +833,7 @@ class Recommender(nn.Module):
                 random_numbers =torch.full([index.size(0)],0)
             else:
                 random_numbers = torch.rand(index.size(0))
-            # 根据 keep_rate 确定哪些行会被保留
+
             mask = random_numbers <= keep_rate
 
             left_index=index[mask,:]
